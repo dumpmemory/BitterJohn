@@ -25,8 +25,9 @@ import (
 )
 
 const (
-	anyTLSImage    = "jonnyan404/anytls:latest"
-	anyTLSPassword = "bitterjohn-e2e-password"
+	anyTLSImageEnv     = "BITTERJOHN_E2E_ANYTLS_IMAGE"
+	defaultAnyTLSImage = "jonnyan404/anytls@sha256:a90ea748f5ea870dc0897d71c0daa9101f36b7c1c6c0041faec0cf3fd690780d"
+	anyTLSPassword     = "bitterjohn-e2e-password"
 )
 
 func TestAnyTLSOfficialServerWithBitterJohnClientTCP(t *testing.T) {
@@ -284,7 +285,7 @@ func runAnyTLSServerContainer(t *testing.T, password string) anyTLSServerContain
 		"run", "--rm", "-d",
 		"--network", "host",
 		"-e", "LOG_LEVEL=debug",
-		anyTLSImage,
+		anyTLSImage(),
 		"/app/anytls-server",
 		"-l", addr,
 		"-p", password,
@@ -309,7 +310,7 @@ func runAnyTLSClientContainer(t *testing.T, clientArgs ...string) dockerContaine
 		"--add-host=host.docker.internal:host-gateway",
 		"-e", "LOG_LEVEL=debug",
 		"-p", "127.0.0.1::1080",
-		anyTLSImage,
+		anyTLSImage(),
 		"/app/anytls-client",
 		"-l", "0.0.0.0:1080",
 	}
@@ -325,6 +326,13 @@ func runAnyTLSClientContainer(t *testing.T, clientArgs ...string) dockerContaine
 	})
 	waitForTCP(t, container.MappedAddress(t, "1080/tcp"), 20*time.Second)
 	return container
+}
+
+func anyTLSImage() string {
+	if image := os.Getenv(anyTLSImageEnv); image != "" {
+		return image
+	}
+	return defaultAnyTLSImage
 }
 
 func (c dockerContainer) MappedAddress(t *testing.T, containerPort string) string {

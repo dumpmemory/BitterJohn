@@ -2,6 +2,8 @@ package anytls
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
 	"encoding/binary"
 	"io"
 	"net"
@@ -42,6 +44,88 @@ func TestCloseBeforeServeListenerStopsListener(t *testing.T) {
 		_ = lt.Close()
 		t.Fatal("serveListener did not return after Close had already run")
 	}
+}
+
+func TestCloseStopsAcceptedConnectionDuringTLSHandshake(t *testing.T) {
+	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := srvIface.(*Server)
+	addr, errCh := serveAnyTLSForShutdownTest(t, srv)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	time.Sleep(20 * time.Millisecond)
+
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	requireConnClosedByServer(t, conn)
+	requireServeStopped(t, errCh)
+}
+
+func TestCloseStopsAcceptedConnectionDuringAuthRead(t *testing.T) {
+	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := srvIface.(*Server)
+	addr, errCh := serveAnyTLSForShutdownTest(t, srv)
+
+	rawConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawConn.Close()
+	conn := tls.Client(rawConn, &tls.Config{InsecureSkipVerify: true})
+	if err := conn.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	requireConnClosedByServer(t, conn)
+	requireServeStopped(t, errCh)
+}
+
+func TestCloseStopsAuthenticatedIdleSession(t *testing.T) {
+	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srvIface.Close()
+	srv := srvIface.(*Server)
+	const password = "idle-session-password"
+	if err := srv.AddPassages([]server.Passage{anyTLSPassage(password)}); err != nil {
+		t.Fatal(err)
+	}
+	addr, errCh := serveAnyTLSForShutdownTest(t, srv)
+
+	rawConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawConn.Close()
+	conn := tls.Client(rawConn, &tls.Config{InsecureSkipVerify: true})
+	if err := conn.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeClientAuth(conn, sha256.Sum256([]byte(password))); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	requireConnClosedByServer(t, conn)
+	requireServeStopped(t, errCh)
 }
 
 func TestManagerPingLastAliveIsSafeWithRegistrar(t *testing.T) {
@@ -110,4 +194,44 @@ func exchangeManagerPing(srv *Server, passage *Passage) error {
 		}
 	}
 	return <-errCh
+}
+
+func serveAnyTLSForShutdownTest(t *testing.T, srv *Server) (string, <-chan error) {
+	t.Helper()
+	lt, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.serveListener(lt)
+	}()
+	return lt.Addr().String(), errCh
+}
+
+func requireConnClosedByServer(t *testing.T, conn net.Conn) {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	var buf [1]byte
+	_, err := conn.Read(buf[:])
+	if err == nil {
+		t.Fatal("connection remained readable after server Close")
+	}
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		t.Fatal("connection was not closed by server Close")
+	}
+}
+
+func requireServeStopped(t *testing.T, errCh <-chan error) {
+	t.Helper()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("serveListener did not stop after Close")
+	}
 }

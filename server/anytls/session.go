@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Session struct {
@@ -25,15 +26,18 @@ type Session struct {
 	closed   chan struct{}
 	closeOne sync.Once
 
-	peerVersion byte
+	peerVersion        byte
+	serverSettingsCh   chan struct{}
+	serverSettingsOnce sync.Once
 }
 
 func newClientSession(conn net.Conn) *Session {
 	return &Session{
-		conn:     conn,
-		isClient: true,
-		streams:  make(map[uint32]*Stream),
-		closed:   make(chan struct{}),
+		conn:             conn,
+		isClient:         true,
+		streams:          make(map[uint32]*Stream),
+		closed:           make(chan struct{}),
+		serverSettingsCh: make(chan struct{}),
 	}
 }
 
@@ -75,6 +79,9 @@ func (s *Session) Close() error {
 	s.closeOne.Do(func() {
 		first = true
 		close(s.closed)
+		if s.isClient {
+			s.closeServerSettings()
+		}
 	})
 	if !first {
 		return nil
@@ -157,9 +164,10 @@ func (s *Session) recvLoop() error {
 				go s.onStream(stream)
 			}
 		case cmdSYNACK:
-			if len(f.data) > 0 {
-				if stream := s.getStream(f.streamID); stream != nil {
-					stream.closeRemote()
+			if stream := s.getStream(f.streamID); stream != nil {
+				stream.receiveSYNACK(f.data)
+				if len(f.data) > 0 {
+					_ = s.closeStream(f.streamID, false)
 				}
 			}
 		case cmdFIN:
@@ -171,14 +179,16 @@ func (s *Session) recvLoop() error {
 			if !s.isClient {
 				receivedSettings = true
 				if v, err := strconv.Atoi(parseSettings(f.data)["v"]); err == nil && v >= 2 {
-					s.peerVersion = byte(v)
+					s.setPeerVersion(byte(v))
 					_ = s.writeFrame(frame{cmd: cmdServerSettings, data: []byte("v=2")})
 				}
 			}
 		case cmdServerSettings:
 			if s.isClient {
 				if v, err := strconv.Atoi(parseSettings(f.data)["v"]); err == nil {
-					s.peerVersion = byte(v)
+					s.completePeerVersion(byte(v))
+				} else {
+					s.completePeerVersion(1)
 				}
 			}
 		case cmdAlert:
@@ -193,6 +203,48 @@ func (s *Session) recvLoop() error {
 			return fmt.Errorf("unknown anytls command: %d", f.cmd)
 		}
 	}
+}
+
+func (s *Session) setPeerVersion(version byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.peerVersion = version
+}
+
+func (s *Session) getPeerVersion() byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.peerVersion
+}
+
+func (s *Session) waitServerSettings(timeout time.Duration) byte {
+	if !s.isClient || s.serverSettingsCh == nil {
+		return s.getPeerVersion()
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-s.serverSettingsCh:
+	case <-timer.C:
+		s.completePeerVersion(1)
+	case <-s.closed:
+	}
+	return s.getPeerVersion()
+}
+
+func (s *Session) completePeerVersion(version byte) {
+	s.mu.Lock()
+	if s.peerVersion == 0 {
+		s.peerVersion = version
+	}
+	s.mu.Unlock()
+	s.closeServerSettings()
+}
+
+func (s *Session) closeServerSettings() {
+	s.serverSettingsOnce.Do(func() {
+		close(s.serverSettingsCh)
+	})
 }
 
 func (s *Session) getStream(id uint32) *Stream {

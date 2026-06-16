@@ -1,6 +1,8 @@
 package anytls
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -17,9 +19,11 @@ type Stream struct {
 	writeDeadline time.Time
 	readDeadlineC chan struct{}
 
-	readCh    chan []byte
-	closed    chan struct{}
-	closeOnce sync.Once
+	readCh     chan []byte
+	closed     chan struct{}
+	closeOnce  sync.Once
+	synackCh   chan error
+	synackOnce sync.Once
 }
 
 func newStream(id uint32, sess *Session) *Stream {
@@ -29,6 +33,7 @@ func newStream(id uint32, sess *Session) *Stream {
 		readDeadlineC: make(chan struct{}),
 		readCh:        make(chan []byte, 32),
 		closed:        make(chan struct{}),
+		synackCh:      make(chan error, 1),
 	}
 }
 
@@ -142,7 +147,10 @@ func (s *Stream) SetWriteDeadline(t time.Time) error {
 	s.mu.Lock()
 	s.writeDeadline = t
 	s.mu.Unlock()
-	return nil
+	if s.sess == nil || s.sess.conn == nil {
+		return nil
+	}
+	return s.sess.conn.SetWriteDeadline(t)
 }
 
 func (s *Stream) SetDeadline(t time.Time) error {
@@ -156,6 +164,32 @@ func (s *Stream) LocalAddr() net.Addr {
 
 func (s *Stream) RemoteAddr() net.Addr {
 	return s.sess.conn.RemoteAddr()
+}
+
+func (s *Stream) receiveSYNACK(data []byte) {
+	var err error
+	if len(data) > 0 {
+		err = errors.New(string(data))
+		s.closeRemote()
+	}
+	s.synackOnce.Do(func() {
+		s.synackCh <- err
+		close(s.synackCh)
+	})
+}
+
+func (s *Stream) waitSYNACK(ctx context.Context) error {
+	select {
+	case err := <-s.synackCh:
+		return err
+	case <-s.closed:
+		return io.ErrClosedPipe
+	case <-s.sess.closed:
+		return io.ErrClosedPipe
+	case <-ctx.Done():
+		_ = s.Close()
+		return ctx.Err()
+	}
 }
 
 func stopTimer(timer *time.Timer) {

@@ -51,6 +51,7 @@ type Server struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	listener    net.Listener
+	activeConns map[net.Conn]struct{}
 }
 
 type Passage struct {
@@ -65,11 +66,12 @@ func New(valueCtx context.Context, dialer netproxy.Dialer) (server.Server, error
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
-		dialer:    dialer,
-		tlsConfig: tlsConfig,
-		users:     make(map[[sha256.Size]byte]Passage),
-		ctx:       ctx,
-		cancel:    cancel,
+		dialer:      dialer,
+		tlsConfig:   tlsConfig,
+		users:       make(map[[sha256.Size]byte]Passage),
+		ctx:         ctx,
+		cancel:      cancel,
+		activeConns: make(map[net.Conn]struct{}),
 	}, nil
 }
 
@@ -114,7 +116,12 @@ func (s *Server) serveListener(lt net.Listener) error {
 			}
 			return err
 		}
-		go func() {
+		if !s.trackConn(conn) {
+			_ = conn.Close()
+			continue
+		}
+		go func(conn net.Conn) {
+			defer s.untrackConn(conn)
 			if err := s.handleConn(conn); err != nil {
 				if errors.Is(err, server.ErrPassageAbuse) ||
 					errors.Is(err, protocol.ErrFailAuth) {
@@ -123,7 +130,7 @@ func (s *Server) serveListener(lt net.Listener) error {
 					log.Info("anytls handleConn: %v", err)
 				}
 			}
-		}()
+		}(conn)
 	}
 }
 
@@ -137,9 +144,17 @@ func (s *Server) Close() error {
 		}
 		listener := s.listener
 		s.listener = nil
+		activeConns := make([]net.Conn, 0, len(s.activeConns))
+		for conn := range s.activeConns {
+			activeConns = append(activeConns, conn)
+		}
+		s.activeConns = make(map[net.Conn]struct{})
 		s.lifecycleMu.Unlock()
 		if listener != nil {
 			err = listener.Close()
+		}
+		for _, conn := range activeConns {
+			_ = conn.Close()
 		}
 	})
 	return err
@@ -489,6 +504,25 @@ func (s *Server) clearListener(lt net.Listener) {
 	if s.listener == lt {
 		s.listener = nil
 	}
+}
+
+func (s *Server) trackConn(conn net.Conn) bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return false
+	}
+	if s.activeConns == nil {
+		s.activeConns = make(map[net.Conn]struct{})
+	}
+	s.activeConns[conn] = struct{}{}
+	return true
+}
+
+func (s *Server) untrackConn(conn net.Conn) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	delete(s.activeConns, conn)
 }
 
 func (s *Server) setLastAlive(t time.Time) {

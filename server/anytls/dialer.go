@@ -9,14 +9,17 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/daeuniverse/softwind/netproxy"
 	"github.com/daeuniverse/softwind/protocol"
+	bjserver "github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
 )
 
 const (
-	managerHost = "bitterjohn.anytls.manager.arpa"
-	managerPort = uint16(0)
+	managerHost                      = "bitterjohn.anytls.manager.arpa"
+	managerPort                      = uint16(0)
+	serverSettingsNegotiationTimeout = 200 * time.Millisecond
 )
 
 func init() {
@@ -65,9 +68,17 @@ func (d *Dialer) Dial(network string, addr string) (netproxy.Conn, error) {
 	}
 	switch magicNetwork.Network {
 	case "tcp":
-		return d.openStream(context.Background(), addr)
+		stream, session, err := d.openStream(context.Background(), addr)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitStreamReady(context.Background(), session, stream); err != nil {
+			_ = stream.Close()
+			return nil, err
+		}
+		return stream, nil
 	case "udp":
-		stream, err := d.openStream(context.Background(), net.JoinHostPort(uotMagicAddress, "0"))
+		stream, session, err := d.openStream(context.Background(), net.JoinHostPort(uotMagicAddress, "0"))
 		if err != nil {
 			return nil, err
 		}
@@ -80,6 +91,10 @@ func (d *Dialer) Dial(network string, addr string) (netproxy.Conn, error) {
 			_ = stream.Close()
 			return nil, err
 		}
+		if err := waitStreamReady(context.Background(), session, stream); err != nil {
+			_ = stream.Close()
+			return nil, err
+		}
 		return newUDPPacketConn(stream, destination), nil
 	default:
 		return nil, fmt.Errorf("%w: %v", netproxy.UnsupportedTunnelTypeError, magicNetwork.Network)
@@ -87,7 +102,7 @@ func (d *Dialer) Dial(network string, addr string) (netproxy.Conn, error) {
 }
 
 func (d *Dialer) DialCmdMsg(cmd protocol.MetadataCmd) (netproxy.Conn, error) {
-	stream, err := d.openStream(context.Background(), net.JoinHostPort(managerHost, "0"))
+	stream, _, err := d.openStream(context.Background(), net.JoinHostPort(managerHost, "0"))
 	if err != nil {
 		return nil, err
 	}
@@ -109,21 +124,30 @@ func (d *Dialer) Close() error {
 	return nil
 }
 
-func (d *Dialer) openStream(ctx context.Context, addr string) (*Stream, error) {
+func (d *Dialer) openStream(ctx context.Context, addr string) (*Stream, *Session, error) {
 	session, err := d.getSession(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	stream, err := session.OpenStream()
 	if err != nil {
 		_ = session.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	if err := writeSocksAddr(stream, addr); err != nil {
 		_ = stream.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	return stream, nil
+	return stream, session, nil
+}
+
+func waitStreamReady(ctx context.Context, session *Session, stream *Stream) error {
+	if session.waitServerSettings(serverSettingsNegotiationTimeout) < 2 {
+		return nil
+	}
+	synackCtx, cancel := context.WithTimeout(ctx, bjserver.DialTimeout)
+	defer cancel()
+	return stream.waitSYNACK(synackCtx)
 }
 
 func (d *Dialer) getSession(ctx context.Context) (*Session, error) {
