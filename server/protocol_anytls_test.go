@@ -22,41 +22,116 @@ func TestProtocolValidAcceptsAnyTLS(t *testing.T) {
 	}
 }
 
-func TestGetHeaderAnyTLS(t *testing.T) {
-	out := model.Out{
-		Host: "203.0.113.8",
-		Port: "443",
-		Argument: model.Argument{
-			Protocol: ProtocolAnyTLS,
-			Password: "secret-password",
-			Method:   "sni=cdn.example.com",
+func TestGetHeaderAnyTLSConfigVariants(t *testing.T) {
+	tests := []struct {
+		name       string
+		out        model.Out
+		wantSNI    string
+		wantErr    bool
+		wantServer string
+	}{
+		{
+			name: "explicit sni overrides ipv4 derived sni",
+			out: model.Out{
+				Host: "203.0.113.8",
+				Port: "443",
+				Argument: model.Argument{
+					Protocol: ProtocolAnyTLS,
+					Password: "secret-password",
+					Method:   "sni=cdn.example.com",
+				},
+			},
+			wantSNI:    "cdn.example.com",
+			wantServer: "cdn.example.com",
+		},
+		{
+			name: "domain host is used as fallback sni",
+			out: model.Out{
+				Host: "edge.example.net",
+				Port: "8443",
+				Argument: model.Argument{
+					Protocol: ProtocolAnyTLS,
+					Password: "secret-password",
+				},
+			},
+			wantSNI:    "edge.example.net",
+			wantServer: "edge.example.net",
+		},
+		{
+			name: "ipv4 host derives lisa subdomain sni",
+			out: model.Out{
+				Host: "203.0.113.8",
+				Port: "9443",
+				Argument: model.Argument{
+					Protocol: ProtocolAnyTLS,
+					Password: "secret-password",
+				},
+			},
+			wantSNI:    "203-0-113-8.sweet.example.com",
+			wantServer: "203-0-113-8.sweet.example.com",
+		},
+		{
+			name: "explicit sni allows ipv6 proxy host",
+			out: model.Out{
+				Host: "2001:db8::1",
+				Port: "9443",
+				Argument: model.Argument{
+					Protocol: ProtocolAnyTLS,
+					Password: "secret-password",
+					Method:   "sni=edge.example.com",
+				},
+			},
+			wantSNI:    "edge.example.com",
+			wantServer: "edge.example.com",
+		},
+		{
+			name: "ipv6 host without explicit sni is rejected",
+			out: model.Out{
+				Host: "2001:db8::1",
+				Port: "9443",
+				Argument: model.Argument{
+					Protocol: ProtocolAnyTLS,
+					Password: "secret-password",
+				},
+			},
+			wantErr: true,
 		},
 	}
 
-	header, err := GetHeader(out, &config.Lisa{Host: "sweet.example.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			header, err := GetHeader(tt.out, &config.Lisa{Host: "sweet.example.com"})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("GetHeader succeeded, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	if got, want := header.ProxyAddress, net.JoinHostPort(out.Host, out.Port); got != want {
-		t.Fatalf("ProxyAddress = %q, want %q", got, want)
-	}
-	if got, want := header.Password, out.Password; got != want {
-		t.Fatalf("Password = %q, want %q", got, want)
-	}
-	if got, want := header.SNI, "cdn.example.com"; got != want {
-		t.Fatalf("SNI = %q, want %q", got, want)
-	}
-	if header.TlsConfig == nil {
-		t.Fatal("TlsConfig is nil")
-	}
-	if got, want := header.TlsConfig.ServerName, "cdn.example.com"; got != want {
-		t.Fatalf("TlsConfig.ServerName = %q, want %q", got, want)
-	}
-	if !header.TlsConfig.InsecureSkipVerify {
-		t.Fatal("anytls client config should skip verification unless a stronger verifier is configured")
-	}
-	if got, want := header.TlsConfig.MinVersion, uint16(tls.VersionTLS12); got != want {
-		t.Fatalf("TlsConfig.MinVersion = %v, want %v", got, want)
+			if got, want := header.ProxyAddress, net.JoinHostPort(tt.out.Host, tt.out.Port); got != want {
+				t.Fatalf("ProxyAddress = %q, want %q", got, want)
+			}
+			if got, want := header.Password, tt.out.Password; got != want {
+				t.Fatalf("Password = %q, want %q", got, want)
+			}
+			if got := header.SNI; got != tt.wantSNI {
+				t.Fatalf("SNI = %q, want %q", got, tt.wantSNI)
+			}
+			if header.TlsConfig == nil {
+				t.Fatal("TlsConfig is nil")
+			}
+			if got := header.TlsConfig.ServerName; got != tt.wantServer {
+				t.Fatalf("TlsConfig.ServerName = %q, want %q", got, tt.wantServer)
+			}
+			if !header.TlsConfig.InsecureSkipVerify {
+				t.Fatal("anytls client config should skip verification unless a stronger verifier is configured")
+			}
+			if got, want := header.TlsConfig.MinVersion, uint16(tls.VersionTLS12); got != want {
+				t.Fatalf("TlsConfig.MinVersion = %v, want %v", got, want)
+			}
+		})
 	}
 }
