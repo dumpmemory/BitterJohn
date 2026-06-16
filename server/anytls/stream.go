@@ -15,6 +15,7 @@ type Stream struct {
 	pending       []byte
 	readDeadline  time.Time
 	writeDeadline time.Time
+	readDeadlineC chan struct{}
 
 	readCh    chan []byte
 	closed    chan struct{}
@@ -23,10 +24,11 @@ type Stream struct {
 
 func newStream(id uint32, sess *Session) *Stream {
 	return &Stream{
-		id:     id,
-		sess:   sess,
-		readCh: make(chan []byte, 32),
-		closed: make(chan struct{}),
+		id:            id,
+		sess:          sess,
+		readDeadlineC: make(chan struct{}),
+		readCh:        make(chan []byte, 32),
+		closed:        make(chan struct{}),
 	}
 }
 
@@ -40,25 +42,32 @@ func (s *Stream) Read(b []byte) (int, error) {
 			return n, nil
 		}
 		deadline := s.readDeadline
+		readDeadlineC := s.readDeadlineC
 		s.mu.Unlock()
 
 		if deadlineExceeded(deadline) {
 			return 0, osDeadlineExceeded()
 		}
 
-		var timer <-chan time.Time
+		var timer *time.Timer
+		var timerC <-chan time.Time
 		if !deadline.IsZero() {
-			timer = time.After(time.Until(deadline))
+			timer = time.NewTimer(time.Until(deadline))
+			timerC = timer.C
 		}
 
 		select {
 		case data := <-s.readCh:
+			stopTimer(timer)
 			s.mu.Lock()
 			s.pending = data
 			s.mu.Unlock()
 		case <-s.closed:
+			stopTimer(timer)
 			return 0, io.EOF
-		case <-timer:
+		case <-readDeadlineC:
+			stopTimer(timer)
+		case <-timerC:
 			return 0, osDeadlineExceeded()
 		}
 	}
@@ -123,6 +132,8 @@ func (s *Stream) receive(data []byte) error {
 func (s *Stream) SetReadDeadline(t time.Time) error {
 	s.mu.Lock()
 	s.readDeadline = t
+	close(s.readDeadlineC)
+	s.readDeadlineC = make(chan struct{})
 	s.mu.Unlock()
 	return nil
 }
@@ -145,4 +156,16 @@ func (s *Stream) LocalAddr() net.Addr {
 
 func (s *Stream) RemoteAddr() net.Addr {
 	return s.sess.conn.RemoteAddr()
+}
+
+func stopTimer(timer *time.Timer) {
+	if timer == nil {
+		return
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
 }

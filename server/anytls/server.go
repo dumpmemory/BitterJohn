@@ -42,11 +42,15 @@ type Server struct {
 	users    map[[sha256.Size]byte]*Passage
 
 	passageContentionCache *server.ContentionCache
+	lastAliveMu            sync.RWMutex
 	lastAlive              time.Time
 
-	ctx      context.Context
-	cancel   context.CancelFunc
-	listener net.Listener
+	lifecycleMu sync.Mutex
+	closeOnce   sync.Once
+	closed      bool
+	ctx         context.Context
+	cancel      context.CancelFunc
+	listener    net.Listener
 }
 
 type Passage struct {
@@ -97,7 +101,11 @@ func (s *Server) Listen(addr string) error {
 }
 
 func (s *Server) serveListener(lt net.Listener) error {
-	s.listener = lt
+	if !s.setListener(lt) {
+		_ = lt.Close()
+		return nil
+	}
+	defer s.clearListener(lt)
 	for {
 		conn, err := lt.Accept()
 		if err != nil {
@@ -120,11 +128,21 @@ func (s *Server) serveListener(lt net.Listener) error {
 }
 
 func (s *Server) Close() error {
-	s.cancel()
-	if s.listener != nil {
-		return s.listener.Close()
-	}
-	return nil
+	var err error
+	s.closeOnce.Do(func() {
+		s.lifecycleMu.Lock()
+		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
+		listener := s.listener
+		s.listener = nil
+		s.lifecycleMu.Unlock()
+		if listener != nil {
+			err = listener.Close()
+		}
+	})
+	return err
 }
 
 func (s *Server) AddPassages(passages []server.Passage) error {
@@ -325,7 +343,7 @@ func (s *Server) handleMsg(conn netproxy.Conn, passage *Passage) error {
 		if !bytes.Equal(reqBody, []byte("ping")) {
 			log.Warn("the body of received ping message is %v instead of %v", strconv.Quote(string(reqBody)), strconv.Quote("ping"))
 		}
-		s.lastAlive = time.Now()
+		s.setLastAlive(time.Now())
 		bandwidthLimit, err := server.GenerateBandwidthLimit()
 		if err != nil {
 			return err
@@ -399,7 +417,7 @@ func (s *Server) registerBackground() {
 			ticker.Stop()
 			return
 		case <-ticker.C:
-			if time.Since(s.lastAlive) < server.LostThreshold {
+			if time.Since(s.getLastAlive()) < server.LostThreshold {
 				continue
 			}
 			if err := s.register(); err != nil {
@@ -451,6 +469,36 @@ func (s *Server) register() error {
 		return err
 	}
 	log.Alert("Succeed to register at %v (%v)", strconv.Quote(s.sweetLisa.Host), cdnNames)
-	s.lastAlive = time.Now()
+	s.setLastAlive(time.Now())
 	return s.SyncPassages(users)
+}
+
+func (s *Server) setListener(lt net.Listener) bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return false
+	}
+	s.listener = lt
+	return true
+}
+
+func (s *Server) clearListener(lt net.Listener) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.listener == lt {
+		s.listener = nil
+	}
+}
+
+func (s *Server) setLastAlive(t time.Time) {
+	s.lastAliveMu.Lock()
+	defer s.lastAliveMu.Unlock()
+	s.lastAlive = t
+}
+
+func (s *Server) getLastAlive() time.Time {
+	s.lastAliveMu.RLock()
+	defer s.lastAliveMu.RUnlock()
+	return s.lastAlive
 }
