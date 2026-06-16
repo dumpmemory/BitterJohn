@@ -39,6 +39,8 @@ type Server struct {
 	arg       server.Argument
 	lastAlive time.Time
 	// mutex protects passages
+	lastAliveMu     sync.RWMutex
+	closeOnce       sync.Once
 	mutex           sync.Mutex
 	passages        []Passage
 	userContextPool *UserContextPool
@@ -100,7 +102,8 @@ func (s *Server) registerBackground() {
 			log.Debug("Server was closed")
 			return
 		case <-ticker.C:
-			if time.Since(s.lastAlive) < server.LostThreshold {
+			lastAlive := s.getLastAlive()
+			if time.Since(lastAlive) < server.LostThreshold {
 				continue
 			} else {
 				log.Warn("Lost connection with SweetLisa more than 5 minutes. Try to register again")
@@ -159,7 +162,7 @@ func (s *Server) register() error {
 		return err
 	}
 	log.Alert("Succeed to register at %v (%v)", strconv.Quote(s.sweetLisa.Host), cdnNames)
-	s.lastAlive = time.Now()
+	s.setLastAlive(time.Now())
 	// sweetLisa can replace the manager key here
 	if err := s.SyncPassages(users); err != nil {
 		return err
@@ -176,13 +179,26 @@ func (s *Server) ListenTCP(addr string) (err error) {
 	if err != nil {
 		return err
 	}
+	s.mutex.Lock()
+	select {
+	case <-s.closed:
+		s.mutex.Unlock()
+		_ = lt.Close()
+		return nil
+	default:
+	}
 	s.listener = lt
+	s.mutex.Unlock()
 	for {
 		conn, err := lt.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
 			log.Warn("%v", err)
+			continue
 		}
-		go func() {
+		go func(conn net.Conn) {
 			err := s.handleTCP(conn)
 			if err != nil {
 				if errors.Is(err, server.ErrPassageAbuse) ||
@@ -192,7 +208,7 @@ func (s *Server) ListenTCP(addr string) (err error) {
 					log.Info("handleTCP: %v", err)
 				}
 			}
-		}()
+		}(conn)
 	}
 }
 
@@ -210,7 +226,16 @@ func (s *Server) ListenUDP(addr string) (err error) {
 	if err != nil {
 		return err
 	}
+	s.mutex.Lock()
+	select {
+	case <-s.closed:
+		s.mutex.Unlock()
+		_ = lu.Close()
+		return nil
+	default:
+	}
 	s.udpConn = lu
+	s.mutex.Unlock()
 	var buf [ip_mtu_trie.MTU]byte
 	for {
 		n, lAddr, err := lu.ReadFrom(buf[:])
@@ -248,18 +273,34 @@ func (s *Server) Listen(addr string) (err error) {
 }
 
 func (s *Server) Close() error {
-	close(s.closed)
 	var err error
-	if s.listener != nil {
-		err = s.listener.Close()
-	}
-	if s.udpConn != nil {
-		err2 := s.udpConn.Close()
-		if err == nil {
-			err = err2
+	s.closeOnce.Do(func() {
+		close(s.closed)
+		s.mutex.Lock()
+		defer s.mutex.Unlock()
+		if s.listener != nil {
+			err = s.listener.Close()
 		}
-	}
+		if s.udpConn != nil {
+			err2 := s.udpConn.Close()
+			if err == nil {
+				err = err2
+			}
+		}
+	})
 	return err
+}
+
+func (s *Server) getLastAlive() time.Time {
+	s.lastAliveMu.RLock()
+	defer s.lastAliveMu.RUnlock()
+	return s.lastAlive
+}
+
+func (s *Server) setLastAlive(t time.Time) {
+	s.lastAliveMu.Lock()
+	defer s.lastAliveMu.Unlock()
+	s.lastAlive = t
 }
 
 func LocalizePassages(passages []server.Passage) (psgs []Passage, manager *Passage) {

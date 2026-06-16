@@ -42,6 +42,8 @@ type Server struct {
 	protocol  protocol.Protocol
 	lastAlive time.Time
 
+	lastAliveMu     sync.RWMutex
+	closeOnce       sync.Once
 	listener        net.Listener
 	mutex           sync.Mutex
 	passages        []Passage
@@ -110,7 +112,7 @@ func NewJohnTlsGrpc(valueCtx context.Context, dialer netproxy.Dialer, sweetLisaH
 }
 
 func (s *Server) reRegister() {
-	s.lastAlive = time.Time{}
+	s.setLastAlive(time.Time{})
 }
 
 func (s *Server) Listen(addr string) (err error) {
@@ -119,15 +121,28 @@ func (s *Server) Listen(addr string) (err error) {
 		return err
 	}
 	s.startTimestamp = time.Now().Unix()
+	s.mutex.Lock()
+	select {
+	case <-s.closed:
+		s.mutex.Unlock()
+		_ = lt.Close()
+		return nil
+	default:
+	}
 	s.listener = lt
+	s.mutex.Unlock()
 	switch s.protocol {
 	case protocol.ProtocolVMessTCP:
 		for {
 			conn, err := lt.Accept()
 			if err != nil {
+				if errors.Is(err, net.ErrClosed) {
+					return nil
+				}
 				log.Warn("%v", err)
+				continue
 			}
-			go func() {
+			go func(conn net.Conn) {
 				err := s.handleConn(conn)
 				if err != nil {
 					if errors.Is(err, server.ErrPassageAbuse) ||
@@ -137,7 +152,7 @@ func (s *Server) Listen(addr string) (err error) {
 						log.Info("handleConn: %v", err)
 					}
 				}
-			}()
+			}(conn)
 		}
 	case protocol.ProtocolVMessTlsGrpc:
 		sni, err := common.HostsToSNI(s.arg.Hostnames, s.sweetLisa.Host)
@@ -282,16 +297,23 @@ func (s *Server) Passages() (passages []server.Passage) {
 }
 
 func (s *Server) Close() error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	if s.grpc.Server != nil {
-		s.grpc.Stop()
-		s.grpc.Server = nil
-	}
-	if s.autocertServer != nil {
-		s.autocertServer.Close()
-	}
-	return s.listener.Close()
+	var err error
+	s.closeOnce.Do(func() {
+		close(s.closed)
+		s.mutex.Lock()
+		defer s.mutex.Unlock()
+		if s.grpc.Server != nil {
+			s.grpc.Stop()
+			s.grpc.Server = nil
+		}
+		if s.autocertServer != nil {
+			s.autocertServer.Close()
+		}
+		if s.listener != nil {
+			err = s.listener.Close()
+		}
+	})
+	return err
 }
 
 func (s *Server) addPassages(passages []Passage) {
@@ -330,16 +352,17 @@ func (s *Server) removePassagesFunc(f func(passage *Passage) (remove bool)) {
 func (s *Server) registerBackground() {
 	var interval = 2 * time.Second
 	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-s.closed:
-			ticker.Stop()
-			break
+			return
 		case <-ticker.C:
-			if time.Since(s.lastAlive) < server.LostThreshold {
+			lastAlive := s.getLastAlive()
+			if time.Since(lastAlive) < server.LostThreshold {
 				continue
 			} else {
-				if s.lastAlive.IsZero() {
+				if lastAlive.IsZero() {
 					log.Warn("Actively request an attempt to re-register")
 				} else {
 					log.Warn("Lost connection with SweetLisa more than 5 minutes. Try to register again")
@@ -398,12 +421,24 @@ func (s *Server) register() error {
 		return err
 	}
 	log.Alert("Succeed to register at %v (%v)", strconv.Quote(s.sweetLisa.Host), cdnNames)
-	s.lastAlive = time.Now()
+	s.setLastAlive(time.Now())
 	// sweetLisa can replace the manager key here
 	if err := s.SyncPassages(users); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) getLastAlive() time.Time {
+	s.lastAliveMu.RLock()
+	defer s.lastAliveMu.RUnlock()
+	return s.lastAlive
+}
+
+func (s *Server) setLastAlive(t time.Time) {
+	s.lastAliveMu.Lock()
+	defer s.lastAliveMu.Unlock()
+	s.lastAlive = t
 }
 
 func (s *Server) ContentionCheck(thisIP net.IP, passage *Passage) (err error) {

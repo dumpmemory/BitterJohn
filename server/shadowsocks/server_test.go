@@ -23,7 +23,14 @@ func getState(s *Server, key string) (list []string) {
 	})
 	nodes := val.(*UserContext).Infra().GetListCopy()
 	for _, node := range nodes {
-		list = append(list, node.Val.(Passage).In.From)
+		switch passage := node.Val.(type) {
+		case Passage:
+			list = append(list, passage.In.From)
+		case *Passage:
+			list = append(list, passage.In.From)
+		default:
+			panic("unexpected passage type")
+		}
 	}
 	val.(*UserContext).Infra().DestroyListCopy(nodes)
 	return list
@@ -48,14 +55,14 @@ func TestServer_AddPassages(t *testing.T) {
 				Passage: model.Passage{
 					In: model.In{
 						From:     "1",
-						Argument: model.Argument{Method: "1"},
+						Argument: model.Argument{Method: "aes-128-gcm"},
 					},
 				}}, {
 				Manager: false,
 				Passage: model.Passage{
 					In: model.In{
 						From:     "2",
-						Argument: model.Argument{Method: "2"},
+						Argument: model.Argument{Method: "aes-256-gcm"},
 					},
 				},
 			},
@@ -66,7 +73,7 @@ func TestServer_AddPassages(t *testing.T) {
 				Passage: model.Passage{
 					In: model.In{
 						From:     "1",
-						Argument: model.Argument{Method: "1"},
+						Argument: model.Argument{Method: "aes-128-gcm"},
 					},
 				},
 			},
@@ -77,7 +84,7 @@ func TestServer_AddPassages(t *testing.T) {
 				Passage: model.Passage{
 					In: model.In{
 						From:     "1",
-						Argument: model.Argument{Method: "1"},
+						Argument: model.Argument{Method: "aes-128-gcm"},
 					},
 				},
 			},
@@ -86,7 +93,7 @@ func TestServer_AddPassages(t *testing.T) {
 				Passage: model.Passage{
 					In: model.In{
 						From:     "2",
-						Argument: model.Argument{Method: "2"},
+						Argument: model.Argument{Method: "aes-256-gcm"},
 					},
 				},
 			},
@@ -148,7 +155,104 @@ func TestServer(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svr.Listen("localhost:18080"); err != nil {
+	s := svr.(*Server)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.ListenTCP("127.0.0.1:0")
+	}()
+	waitForListener(t, s)
+	if err := svr.Close(); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ListenTCP did not return after Close")
+	}
+}
+
+func TestServer_ListenUDPReturnsIfAlreadyClosed(t *testing.T) {
+	s := &Server{closed: make(chan struct{})}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.ListenUDP("127.0.0.1:0")
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ListenUDP did not return after Close")
+	}
+}
+
+func TestServer_CloseStopsListenUDP(t *testing.T) {
+	s := &Server{closed: make(chan struct{})}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.ListenUDP("127.0.0.1:0")
+	}()
+
+	waitForUDPConn(t, s)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ListenUDP did not return after Close")
+	}
+}
+
+func waitForListener(t *testing.T, s *Server) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("listener was not created")
+		case <-ticker.C:
+			s.mutex.Lock()
+			listener := s.listener
+			s.mutex.Unlock()
+			if listener != nil {
+				return
+			}
+		}
+	}
+}
+
+func waitForUDPConn(t *testing.T, s *Server) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("udp listener was not created")
+		case <-ticker.C:
+			s.mutex.Lock()
+			udpConn := s.udpConn
+			s.mutex.Unlock()
+			if udpConn != nil {
+				return
+			}
+		}
 	}
 }

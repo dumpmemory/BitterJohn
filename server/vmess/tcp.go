@@ -205,7 +205,7 @@ func (s *Server) handleMsg(conn *vmess.Conn, reqMetadata *vmess.Metadata, passag
 			log.Warn("the body of received ping message is %v instead of %v", strconv.Quote(string(buf)), strconv.Quote("ping"))
 		}
 		log.Trace("Received a ping message")
-		s.lastAlive = time.Now()
+		s.setLastAlive(time.Now())
 		bandwidthLimit, err := server.GenerateBandwidthLimit()
 		if err != nil {
 			log.Warn("generatePingResp: %v", err)

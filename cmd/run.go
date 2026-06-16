@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,6 +35,37 @@ import (
 const (
 	DiskBloomSalt = "BitterJohn"
 )
+
+type runShutdown struct {
+	done  chan struct{}
+	err   error
+	close func() error
+	once  sync.Once
+}
+
+func newRunShutdown(close func() error) *runShutdown {
+	return &runShutdown{
+		done:  make(chan struct{}),
+		close: close,
+	}
+}
+
+func (s *runShutdown) signal(err error) {
+	s.once.Do(func() {
+		if s.close != nil {
+			if closeErr := s.close(); err == nil {
+				err = closeErr
+			}
+		}
+		s.err = err
+		close(s.done)
+	})
+}
+
+func (s *runShutdown) wait() error {
+	<-s.done
+	return s.err
+}
 
 var (
 	runCmd = &cobra.Command{
@@ -72,8 +104,6 @@ func Run() (err error) {
 
 	shadowsocks.DefaultIodizedSource = "https://autumn-cell-a7f2.tuta.cc/explore"
 
-	var done = make(chan error)
-
 	conf := &config.ParamsObj
 
 	var (
@@ -100,6 +130,7 @@ func Run() (err error) {
 	if err != nil {
 		return fmt.Errorf("%v", err)
 	}
+	shutdown := newRunShutdown(s.Close)
 	log.Alert("Protocol: %v", conf.John.Protocol)
 	if common.StringsHas(strings.Split(conf.John.Protocol, "+"), "tls") {
 		// waiting for the record
@@ -124,8 +155,7 @@ func Run() (err error) {
 		log.Alert("Found DNS record")
 	}
 	go func() {
-		err = s.Listen(conf.John.Listen)
-		close(done)
+		shutdown.signal(s.Listen(conf.John.Listen))
 	}()
 
 	if !config.ParamsObj.John.DoNotValidateCDN {
@@ -134,8 +164,8 @@ func Run() (err error) {
 			var consecutiveFailure uint32
 			for {
 				select {
-				case <-done:
-					break
+				case <-shutdown.done:
+					return
 				default:
 				}
 				var cdn string
@@ -145,19 +175,21 @@ func Run() (err error) {
 				if len(t) > 0 {
 					validateToken = t[0]
 				}
-				cdn, err = api.TrustedHost(ctx, config.ParamsObj.Lisa.Host, validateToken)
-				if err != nil {
+				cdn, cdnErr := api.TrustedHost(ctx, config.ParamsObj.Lisa.Host, validateToken)
+				if cdnErr != nil {
 					switch {
-					case strings.Contains(err.Error(), "context deadline exceeded"):
+					case strings.Contains(cdnErr.Error(), "context deadline exceeded"):
 						// pass
-						log.Warn("%v: %v", cdn, err)
-					case errors.Is(err, cdn_validator.ErrCanStealIP):
-						close(done)
-						log.Error("%v: %v", cdn, err)
-					case errors.Is(err, cdn_validator.ErrFailedValidate):
+						log.Warn("%v: %v", cdn, cdnErr)
+					case errors.Is(cdnErr, cdn_validator.ErrCanStealIP):
+						log.Error("%v: %v", cdn, cdnErr)
+						cancel()
+						shutdown.signal(cdnErr)
+						return
+					case errors.Is(cdnErr, cdn_validator.ErrFailedValidate):
 						atomic.AddUint32(&consecutiveFailure, 1)
 						if consecutiveFailure >= 3 {
-							log.Error("%v: %v", cdn, err)
+							log.Error("%v: %v", cdn, cdnErr)
 							// TODO: unregister and wait for recover
 						}
 					}
@@ -165,13 +197,16 @@ func Run() (err error) {
 					consecutiveFailure = 0
 				}
 				cancel()
-				time.Sleep(30*time.Second + time.Duration(fastrand.Intn(151))*time.Second)
+				select {
+				case <-shutdown.done:
+					return
+				case <-time.After(30*time.Second + time.Duration(fastrand.Intn(151))*time.Second):
+				}
 			}
 		}()
 	}
 
-	<-done
-	if err != nil {
+	if err := shutdown.wait(); err != nil {
 		return fmt.Errorf("%v", err)
 	}
 	return nil

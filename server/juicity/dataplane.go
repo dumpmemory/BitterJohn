@@ -63,6 +63,7 @@ func New(opts *Options) (*Server, error) {
 		}
 		dialer = direct.NewDirectDialerLaddr(true, lAddr)
 	}
+	ctx, close := context.WithCancel(context.Background())
 	return &Server{
 		dialer: dialer,
 		tlsConfig: &tls.Config{
@@ -73,6 +74,8 @@ func New(opts *Options) (*Server, error) {
 		maxOpenIncomingStreams: 100,
 		congestionControl:      opts.CongestionControl,
 		cwnd:                   10,
+		ctx:                    ctx,
+		close:                  close,
 	}, nil
 }
 
@@ -90,9 +93,18 @@ func (s *Server) Serve(addr string) (err error) {
 	if err != nil {
 		return err
 	}
+	s.setListener(listener)
+	defer func() {
+		_ = listener.Close()
+		s.setListener(nil)
+	}()
+	ctx := s.serverContext()
 	for {
-		conn, err := listener.Accept(context.Background())
+		conn, err := listener.Accept(ctx)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
 			return err
 		}
 		go func(conn quic.Connection) {
@@ -130,7 +142,7 @@ func (s *Server) handleConn(conn quic.Connection) (err error) {
 			return err
 		}
 		go func(stream quic.Stream) {
-			if err = s.handleStream(ctx, authCtx, &id, conn, stream); err != nil {
+			if err := s.handleStream(ctx, authCtx, &id, conn, stream); err != nil {
 				log.Warn("handleStream: %v", err)
 			}
 		}(stream)
@@ -324,7 +336,7 @@ func (s *Server) handleMsg(conn *juicity.Conn, reqMetadata *trojanc.Metadata, pa
 			log.Warn("the body of received ping message is %v instead of %v", strconv.Quote(string(buf)), strconv.Quote("ping"))
 		}
 		log.Trace("Received a ping message")
-		s.lastAlive = time.Now()
+		s.setLastAlive(time.Now())
 		bandwidthLimit, err := server.GenerateBandwidthLimit()
 		if err != nil {
 			log.Warn("generatePingResp: %v", err)

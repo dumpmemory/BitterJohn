@@ -45,10 +45,17 @@ type Server struct {
 	passages []Passage
 	// passageContentionCache log the last client IP of passages
 	passageContentionCache *server.ContentionCache
+	lastAliveMu            sync.RWMutex
 	lastAlive              time.Time
+	lifecycleMu            sync.Mutex
 	ctx                    context.Context
 	close                  func()
-	listener               net.Listener
+	listener               quicListener
+}
+
+type quicListener interface {
+	Close() error
+	Addr() net.Addr
 }
 
 type Passage struct {
@@ -99,7 +106,7 @@ func (s *Server) registerBackground() {
 			log.Debug("Server was closed")
 			return
 		case <-ticker.C:
-			if time.Since(s.lastAlive) < server.LostThreshold {
+			if time.Since(s.getLastAlive()) < server.LostThreshold {
 				continue
 			} else {
 				log.Warn("Lost connection with SweetLisa more than 5 minutes. Try to register again")
@@ -159,7 +166,7 @@ func (s *Server) register() error {
 		return err
 	}
 	log.Alert("Succeed to register at %v (%v)", strconv.Quote(s.sweetLisa.Host), cdnNames)
-	s.lastAlive = time.Now()
+	s.setLastAlive(time.Now())
 	// sweetLisa can replace the manager key here
 	if err := s.SyncPassages(users); err != nil {
 		return err
@@ -176,11 +183,50 @@ func (s *Server) Listen(addr string) (err error) {
 }
 
 func (s *Server) Close() error {
-	s.close()
-	if s.listener != nil {
-		return s.listener.Close()
+	s.lifecycleMu.Lock()
+	if s.close != nil {
+		s.close()
+	}
+	listener := s.listener
+	s.listener = nil
+	s.lifecycleMu.Unlock()
+	if listener != nil {
+		return listener.Close()
 	}
 	return nil
+}
+
+func (s *Server) serverContext() context.Context {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.ctx == nil || s.close == nil {
+		s.ctx, s.close = context.WithCancel(context.Background())
+	}
+	return s.ctx
+}
+
+func (s *Server) setListener(listener quicListener) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.listener = listener
+}
+
+func (s *Server) getListener() quicListener {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.listener
+}
+
+func (s *Server) setLastAlive(t time.Time) {
+	s.lastAliveMu.Lock()
+	defer s.lastAliveMu.Unlock()
+	s.lastAlive = t
+}
+
+func (s *Server) getLastAlive() time.Time {
+	s.lastAliveMu.RLock()
+	defer s.lastAliveMu.RUnlock()
+	return s.lastAlive
 }
 
 func LocalizePassages(passages []server.Passage) (psgs []Passage, manager *Passage) {

@@ -2,10 +2,13 @@ package vmess
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
+	"time"
 
 	proto "github.com/daeuniverse/softwind/pkg/gun_proto"
+	"github.com/daeuniverse/softwind/protocol"
 	"github.com/daeuniverse/softwind/protocol/direct"
 	"github.com/daeuniverse/softwind/protocol/vmess"
 	grpc2 "github.com/daeuniverse/softwind/transport/grpc"
@@ -36,9 +39,45 @@ func TestServer(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("Listen at localhost:18080")
-	if err := svr.Listen("tcp://localhost:18080"); err != nil {
+	s := svr.(*Server)
+	s.protocol = protocol.ProtocolVMessTCP
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- svr.Listen("127.0.0.1:0")
+	}()
+	waitForListener(t, s)
+	if err := svr.Close(); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Listen did not return after Close")
+	}
+}
+
+func TestCloseClosesClosedChannel(t *testing.T) {
+	doubleCuckoo := vmess.NewReplayFilter(120)
+	svr, err := New(context.WithValue(context.Background(), "doubleCuckoo", doubleCuckoo), direct.SymmetricDirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := svr.(*Server)
+	lt, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.listener = lt
+	if err := svr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-s.closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not close closed channel")
 	}
 }
 
@@ -65,7 +104,7 @@ func TestGrpcServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lt, err := net.Listen("tcp", "localhost:18443")
+	lt, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,8 +116,37 @@ func TestGrpcServer(t *testing.T) {
 	}
 	proto.RegisterGunServiceServerX(s.grpc.Server, s.grpc, "GunService")
 
-	t.Log("Serve at https://localhost:18443")
-	if err = s.grpc.Serve(lt); err != nil {
-		t.Fatal(err)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.grpc.Serve(lt)
+	}()
+	s.grpc.Stop()
+	select {
+	case err = <-errCh:
+		if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("grpc Serve did not return after Stop")
+	}
+}
+
+func waitForListener(t *testing.T, s *Server) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("listener was not created")
+		case <-ticker.C:
+			s.mutex.Lock()
+			listener := s.listener
+			s.mutex.Unlock()
+			if listener != nil {
+				return
+			}
+		}
 	}
 }

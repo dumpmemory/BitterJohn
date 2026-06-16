@@ -15,6 +15,9 @@ type LruList struct {
 	list           []*Node
 	muList         sync.Mutex
 	updateTicker   *time.Ticker
+	updateStop     chan struct{}
+	updateDone     chan struct{}
+	closeOnce      sync.Once
 	avg            uint32
 	max            uint32
 	insertStrategy InsertStrategy
@@ -32,6 +35,8 @@ func New(updateInterval time.Duration, insertStrategy InsertStrategy) *LruList {
 	list := &LruList{
 		insertStrategy: insertStrategy,
 		updateTicker:   time.NewTicker(updateInterval),
+		updateStop:     make(chan struct{}),
+		updateDone:     make(chan struct{}),
 		pool:           newGrowingPool(1),
 	}
 	list.list = list.pool.Get(1)
@@ -43,8 +48,11 @@ func NewWithList(updateInterval time.Duration, insertStrategy InsertStrategy, li
 	lruList := &LruList{
 		insertStrategy: insertStrategy,
 		updateTicker:   time.NewTicker(updateInterval),
+		updateStop:     make(chan struct{}),
+		updateDone:     make(chan struct{}),
 		pool:           newGrowingPool(len(list)),
 	}
+	close(lruList.updateDone)
 	l := lruList.pool.Get(len(list))
 	for i := range list {
 		l[i] = &Node{Val: list[i]}
@@ -54,7 +62,11 @@ func NewWithList(updateInterval time.Duration, insertStrategy InsertStrategy, li
 }
 
 func (l *LruList) Close() (err error) {
-	l.updateTicker.Stop()
+	l.closeOnce.Do(func() {
+		l.updateTicker.Stop()
+		close(l.updateStop)
+	})
+	<-l.updateDone
 	return nil
 }
 
