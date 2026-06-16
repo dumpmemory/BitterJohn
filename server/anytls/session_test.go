@@ -108,6 +108,55 @@ func TestDialFallsBackToV1WithoutServerSettings(t *testing.T) {
 	}
 }
 
+func TestLateServerSettingsCanUpgradeAfterNegotiationTimeout(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	session := newClientSession(clientConn)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.runClient()
+	}()
+
+	if err := serverConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := readFrame(serverConn); err != nil {
+		t.Fatal(err)
+	} else if f.cmd != cmdSettings {
+		t.Fatalf("first client frame command = %d, want cmdSettings", f.cmd)
+	}
+	if err := serverConn.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := session.waitServerSettings(10 * time.Millisecond); got != 1 {
+		t.Fatalf("peer version after negotiation timeout = %d, want v1 fallback", got)
+	}
+	if err := writeFrame(serverConn, frame{cmd: cmdServerSettings, data: []byte("v=2")}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		if got := session.waitServerSettings(time.Millisecond); got == 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+		select {
+		case <-deadline:
+			t.Fatal("late server settings did not upgrade peer version to v2")
+		default:
+		}
+	}
+
+	_ = session.Close()
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func startSynackServer(t *testing.T, password string) (addr string, releaseSynack chan struct{}, closeFn func()) {
 	t.Helper()
 	tlsConfig, err := newSelfSignedTLSConfig()

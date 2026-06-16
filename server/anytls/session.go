@@ -18,7 +18,9 @@ type Session struct {
 	isClient bool
 	onStream func(*Stream)
 
-	writeMu sync.Mutex
+	writeMu      sync.Mutex
+	writeStateMu sync.Mutex
+	activeWrite  *Stream
 
 	mu       sync.RWMutex
 	nextID   uint32
@@ -26,9 +28,11 @@ type Session struct {
 	closed   chan struct{}
 	closeOne sync.Once
 
-	peerVersion        byte
-	serverSettingsCh   chan struct{}
-	serverSettingsOnce sync.Once
+	peerVersion            byte
+	serverSettingsDone     bool
+	serverSettingsTimedOut bool
+	serverSettingsCh       chan struct{}
+	serverSettingsOnce     sync.Once
 }
 
 func newClientSession(conn net.Conn) *Session {
@@ -119,6 +123,53 @@ func (s *Session) writeFrame(f frame) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return writeFrame(s.conn, f)
+}
+
+func (s *Session) writeFrameForStream(stream *Stream, f frame) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	deadline := stream.getWriteDeadline()
+	if deadlineExceeded(deadline) {
+		return osDeadlineExceeded()
+	}
+	if err := s.beginStreamWrite(stream, deadline); err != nil {
+		s.endStreamWrite(stream)
+		return err
+	}
+	defer s.endStreamWrite(stream)
+	return writeFrame(s.conn, f)
+}
+
+func (s *Session) beginStreamWrite(stream *Stream, deadline time.Time) error {
+	s.writeStateMu.Lock()
+	defer s.writeStateMu.Unlock()
+	s.activeWrite = stream
+	if s.conn == nil {
+		return nil
+	}
+	return s.conn.SetWriteDeadline(deadline)
+}
+
+func (s *Session) endStreamWrite(stream *Stream) {
+	s.writeStateMu.Lock()
+	defer s.writeStateMu.Unlock()
+	if s.activeWrite != stream {
+		return
+	}
+	s.activeWrite = nil
+	if s.conn != nil {
+		_ = s.conn.SetWriteDeadline(time.Time{})
+	}
+}
+
+func (s *Session) updateActiveWriteDeadline(stream *Stream, deadline time.Time) error {
+	s.writeStateMu.Lock()
+	defer s.writeStateMu.Unlock()
+	if s.activeWrite != stream || s.conn == nil {
+		return nil
+	}
+	return s.conn.SetWriteDeadline(deadline)
 }
 
 func (s *Session) closeStream(id uint32, notify bool) error {
@@ -221,24 +272,56 @@ func (s *Session) waitServerSettings(timeout time.Duration) byte {
 	if !s.isClient || s.serverSettingsCh == nil {
 		return s.getPeerVersion()
 	}
+	if version, shouldWait := s.serverSettingsState(); !shouldWait {
+		return version
+	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-s.serverSettingsCh:
 	case <-timer.C:
-		s.completePeerVersion(1)
+		s.markServerSettingsTimedOut()
 	case <-s.closed:
 	}
-	return s.getPeerVersion()
+	version := s.getPeerVersion()
+	if version == 0 {
+		return 1
+	}
+	return version
 }
 
 func (s *Session) completePeerVersion(version byte) {
 	s.mu.Lock()
-	if s.peerVersion == 0 {
+	if s.peerVersion == 0 || s.serverSettingsTimedOut {
 		s.peerVersion = version
 	}
+	s.serverSettingsDone = true
+	s.serverSettingsTimedOut = false
 	s.mu.Unlock()
 	s.closeServerSettings()
+}
+
+func (s *Session) serverSettingsState() (version byte, shouldWait bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.serverSettingsDone || s.peerVersion != 0 {
+		if s.peerVersion == 0 {
+			return 1, false
+		}
+		return s.peerVersion, false
+	}
+	if s.serverSettingsTimedOut {
+		return 1, false
+	}
+	return 0, true
+}
+
+func (s *Session) markServerSettingsTimedOut() {
+	s.mu.Lock()
+	if s.peerVersion == 0 && !s.serverSettingsDone {
+		s.serverSettingsTimedOut = true
+	}
+	s.mu.Unlock()
 }
 
 func (s *Session) closeServerSettings() {

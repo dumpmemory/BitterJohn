@@ -79,10 +79,7 @@ func (s *Stream) Read(b []byte) (int, error) {
 }
 
 func (s *Stream) Write(b []byte) (int, error) {
-	s.mu.Lock()
-	deadline := s.writeDeadline
-	s.mu.Unlock()
-	if deadlineExceeded(deadline) {
+	if deadlineExceeded(s.getWriteDeadline()) {
 		return 0, osDeadlineExceeded()
 	}
 
@@ -92,7 +89,7 @@ func (s *Stream) Write(b []byte) (int, error) {
 		if end > len(b) {
 			end = len(b)
 		}
-		if err := s.sess.writeFrame(frame{
+		if err := s.sess.writeFrameForStream(s, frame{
 			cmd:      cmdPSH,
 			streamID: s.id,
 			data:     b[written:end],
@@ -114,6 +111,12 @@ func (s *Stream) Close() error {
 		return nil
 	}
 	return s.sess.closeStream(s.id, true)
+}
+
+func (s *Stream) getWriteDeadline() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writeDeadline
 }
 
 func (s *Stream) closeRemote() {
@@ -147,10 +150,10 @@ func (s *Stream) SetWriteDeadline(t time.Time) error {
 	s.mu.Lock()
 	s.writeDeadline = t
 	s.mu.Unlock()
-	if s.sess == nil || s.sess.conn == nil {
+	if s.sess == nil {
 		return nil
 	}
-	return s.sess.conn.SetWriteDeadline(t)
+	return s.sess.updateActiveWriteDeadline(s, t)
 }
 
 func (s *Stream) SetDeadline(t time.Time) error {
