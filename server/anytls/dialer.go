@@ -106,7 +106,11 @@ func (d *Dialer) DialContext(ctx context.Context, network string, addr string) (
 }
 
 func (d *Dialer) DialCmdMsg(cmd protocol.MetadataCmd) (netproxy.Conn, error) {
-	stream, _, err := d.openStream(context.Background(), net.JoinHostPort(managerHost, "0"))
+	return d.DialCmdMsgContext(context.Background(), cmd)
+}
+
+func (d *Dialer) DialCmdMsgContext(ctx context.Context, cmd protocol.MetadataCmd) (netproxy.Conn, error) {
+	stream, _, err := d.openStream(ctx, net.JoinHostPort(managerHost, "0"))
 	if err != nil {
 		return nil, err
 	}
