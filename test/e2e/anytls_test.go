@@ -64,22 +64,7 @@ func TestAnyTLSOfficialServerWithBitterJohnClientTCP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			header := protocol.Header{
-				ProxyAddress: container.Addr,
-				Password:     anyTLSPassword,
-				IsClient:     true,
-			}
-			if tt.configure != nil {
-				tt.configure(&header)
-			}
-			dialer, err := anytlsserver.NewDialer(direct.SymmetricDirect, header)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if closer, ok := dialer.(interface{ Close() error }); ok {
-				t.Cleanup(func() { _ = closer.Close() })
-			}
-
+			dialer := newBitterJohnAnyTLSDialer(t, container.Addr, anyTLSPassword, tt.configure)
 			conn, err := dialer.Dial("tcp", echoAddr)
 			if err != nil {
 				t.Fatal(err)
@@ -89,6 +74,39 @@ func TestAnyTLSOfficialServerWithBitterJohnClientTCP(t *testing.T) {
 			assertPingPong(t, conn)
 		})
 	}
+
+	t.Run("reuse session for multiple tcp streams", func(t *testing.T) {
+		dialer := newBitterJohnAnyTLSDialer(t, container.Addr, anyTLSPassword, nil)
+		for i := 0; i < 3; i++ {
+			conn, err := dialer.Dial("tcp", echoAddr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertPingPong(t, conn)
+			if err := conn.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+
+	t.Run("large payload spans stream frames", func(t *testing.T) {
+		payloadAddr, closePayloadEcho := startTCPLengthEcho(t)
+		t.Cleanup(closePayloadEcho)
+
+		dialer := newBitterJohnAnyTLSDialer(t, container.Addr, anyTLSPassword, nil)
+		conn, err := dialer.Dial("tcp", payloadAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		assertLengthEcho(t, conn, makePayload(96*1024))
+	})
+
+	t.Run("bad password is rejected", func(t *testing.T) {
+		dialer := newBitterJohnAnyTLSDialer(t, container.Addr, "wrong-"+anyTLSPassword, nil)
+		assertDialPingPongFails(t, dialer, "tcp", echoAddr)
+	})
 }
 
 func TestAnyTLSOfficialServerWithBitterJohnClientUDP(t *testing.T) {
@@ -118,15 +136,17 @@ func TestAnyTLSOfficialServerWithBitterJohnClientUDP(t *testing.T) {
 	defer conn.Close()
 
 	packetConn := conn.(netproxy.PacketConn)
-	if _, err := packetConn.WriteTo([]byte("ping"), echoAddr); err != nil {
-		t.Fatal(err)
-	}
-	buf := make([]byte, 4)
-	if _, _, err := packetConn.ReadFrom(buf); err != nil {
-		t.Fatal(err)
-	}
-	if got := string(buf); got != "pong" {
-		t.Fatalf("UDP response = %q, want pong", got)
+	for i := 0; i < 3; i++ {
+		if _, err := packetConn.WriteTo([]byte("ping"), echoAddr); err != nil {
+			t.Fatal(err)
+		}
+		buf := make([]byte, 4)
+		if _, _, err := packetConn.ReadFrom(buf); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(buf); got != "pong" {
+			t.Fatalf("UDP response = %q, want pong", got)
+		}
 	}
 }
 
@@ -140,8 +160,9 @@ func TestAnyTLSBitterJohnServerWithOfficialClientTCP(t *testing.T) {
 	containerServerAddr := hostDockerInternalAddress(serverAddr)
 
 	tests := []struct {
-		name string
-		args []string
+		name       string
+		args       []string
+		targetAddr func(string) string
 	}{
 		{
 			name: "flags",
@@ -151,14 +172,23 @@ func TestAnyTLSBitterJohnServerWithOfficialClientTCP(t *testing.T) {
 			name: "uri with sni",
 			args: []string{"-s", fmt.Sprintf("anytls://%s@%s/?sni=edge.example.com", anyTLSPassword, containerServerAddr)},
 		},
+		{
+			name:       "domain target",
+			args:       []string{"-s", containerServerAddr, "-p", anyTLSPassword},
+			targetAddr: localhostAddress,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			container := runAnyTLSClientContainer(t, tt.args...)
 			socksAddr := container.MappedAddress(t, "1080/tcp")
+			targetAddr := echoAddr
+			if tt.targetAddr != nil {
+				targetAddr = tt.targetAddr(echoAddr)
+			}
 
-			conn, err := dialSOCKS5TCP(context.Background(), socksAddr, echoAddr)
+			conn, err := dialSOCKS5TCP(context.Background(), socksAddr, targetAddr)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -167,6 +197,45 @@ func TestAnyTLSBitterJohnServerWithOfficialClientTCP(t *testing.T) {
 			assertPingPong(t, conn)
 		})
 	}
+}
+
+func TestAnyTLSBitterJohnServerRejectsOfficialClientBadPassword(t *testing.T) {
+	requireAnyTLSE2E(t)
+
+	echoAddr, closeEcho := startTCPEcho(t)
+	t.Cleanup(closeEcho)
+
+	serverAddr := startBitterJohnAnyTLSServer(t, anyTLSPassword)
+	container := runAnyTLSClientContainer(t, "-s", hostDockerInternalAddress(serverAddr), "-p", "wrong-"+anyTLSPassword)
+	socksAddr := container.MappedAddress(t, "1080/tcp")
+
+	conn, err := dialSOCKS5TCP(context.Background(), socksAddr, echoAddr)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	assertPingPongFails(t, conn)
+}
+
+func newBitterJohnAnyTLSDialer(t *testing.T, serverAddr string, password string, configure func(*protocol.Header)) netproxy.Dialer {
+	t.Helper()
+
+	header := protocol.Header{
+		ProxyAddress: serverAddr,
+		Password:     password,
+		IsClient:     true,
+	}
+	if configure != nil {
+		configure(&header)
+	}
+	dialer, err := anytlsserver.NewDialer(direct.SymmetricDirect, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closer, ok := dialer.(interface{ Close() error }); ok {
+		t.Cleanup(func() { _ = closer.Close() })
+	}
+	return dialer
 }
 
 func waitForTCP(t *testing.T, addr string, timeout time.Duration) {
@@ -397,6 +466,61 @@ func serveTCPEcho(conn net.Conn) {
 	}
 }
 
+func startTCPLengthEcho(t *testing.T) (string, func()) {
+	t.Helper()
+
+	lt, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(lt.Addr().String())
+	if err != nil {
+		_ = lt.Close()
+		t.Fatal(err)
+	}
+	addr := net.JoinHostPort("127.0.0.1", port)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := lt.Accept()
+			if err != nil {
+				return
+			}
+			go serveTCPLengthEcho(conn)
+		}
+	}()
+	return addr, func() {
+		_ = lt.Close()
+		<-done
+	}
+}
+
+func serveTCPLengthEcho(conn net.Conn) {
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	for {
+		var lenBuf [4]byte
+		if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
+			return
+		}
+		length := binary.BigEndian.Uint32(lenBuf[:])
+		if length > 1<<20 {
+			return
+		}
+		payload := make([]byte, int(length))
+		if _, err := io.ReadFull(conn, payload); err != nil {
+			return
+		}
+		if err := writeFull(conn, lenBuf[:]); err != nil {
+			return
+		}
+		if err := writeFull(conn, payload); err != nil {
+			return
+		}
+	}
+}
+
 func startUDPEcho(t *testing.T) (string, func()) {
 	t.Helper()
 
@@ -453,12 +577,100 @@ func assertPingPong(t *testing.T, conn rwConn) {
 	}
 }
 
+func assertDialPingPongFails(t *testing.T, dialer netproxy.Dialer, network string, addr string) {
+	t.Helper()
+
+	conn, err := dialer.Dial(network, addr)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	assertPingPongFails(t, conn)
+}
+
+func assertPingPongFails(t *testing.T, conn rwConn) {
+	t.Helper()
+
+	if d, ok := conn.(interface{ SetDeadline(time.Time) error }); ok {
+		_ = d.SetDeadline(time.Now().Add(3 * time.Second))
+	}
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		return
+	}
+	resp := make([]byte, 4)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		return
+	}
+	t.Fatalf("unexpected successful ping response %q", string(resp))
+}
+
+func assertLengthEcho(t *testing.T, conn rwConn, payload []byte) {
+	t.Helper()
+
+	if d, ok := conn.(interface{ SetDeadline(time.Time) error }); ok {
+		_ = d.SetDeadline(time.Now().Add(10 * time.Second))
+	}
+	var lenBuf [4]byte
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(payload)))
+	if err := writeFull(conn, lenBuf[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFull(conn, payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
+		t.Fatal(err)
+	}
+	gotLen := binary.BigEndian.Uint32(lenBuf[:])
+	if gotLen != uint32(len(payload)) {
+		t.Fatalf("echo length = %d, want %d", gotLen, len(payload))
+	}
+	got := make([]byte, int(gotLen))
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("echo payload does not match")
+	}
+}
+
+func writeFull(w io.Writer, b []byte) error {
+	for len(b) > 0 {
+		n, err := w.Write(b)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		b = b[n:]
+	}
+	return nil
+}
+
+func makePayload(size int) []byte {
+	payload := make([]byte, size)
+	for i := range payload {
+		payload[i] = byte((i*31 + 7) % 251)
+	}
+	return payload
+}
+
 func hostDockerInternalAddress(addr string) string {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		panic(err)
 	}
 	return net.JoinHostPort("host.docker.internal", port)
+}
+
+func localhostAddress(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		panic(err)
+	}
+	return net.JoinHostPort("localhost", port)
 }
 
 func dialSOCKS5TCP(ctx context.Context, socksAddr string, targetAddr string) (net.Conn, error) {
