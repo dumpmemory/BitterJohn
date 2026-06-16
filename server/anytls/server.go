@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/protocol"
+	"github.com/daeuniverse/outbound/netproxy"
+	"github.com/daeuniverse/outbound/protocol"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/api"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/common"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/config"
@@ -319,7 +319,7 @@ func (s *Server) handleStream(stream *Stream, passage *Passage) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), server.DialTimeout)
 	defer cancel()
-	rConn, err := (&netproxy.ContextDialerConverter{Dialer: dialer}).DialContext(ctx, "tcp", destination.String())
+	rConn, err := dialer.DialContext(ctx, "tcp", destination.String())
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
@@ -474,7 +474,7 @@ func (s *Server) register() error {
 		Hosts:  s.arg.Hostnames,
 		Port:   s.arg.Port,
 		Argument: model.Argument{
-			Protocol: server.ProtocolAnyTLS,
+			Protocol: "anytls",
 			Password: manager.In.Password,
 		},
 		BandwidthLimit: bandwidthLimit,

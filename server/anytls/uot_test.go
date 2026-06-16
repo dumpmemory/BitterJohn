@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/softwind/netproxy"
+	"github.com/daeuniverse/outbound/netproxy"
 )
 
 func TestUDPPacketConnReadFromResolvesDomainTarget(t *testing.T) {

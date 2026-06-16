@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/softwind/protocol"
-	"github.com/daeuniverse/softwind/protocol/direct"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/direct"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
 )
 
@@ -58,7 +58,7 @@ func TestDialWaitsForV2Synack(t *testing.T) {
 
 	dialDone := make(chan error, 1)
 	go func() {
-		conn, err := dialer.Dial("tcp", "127.0.0.1:1")
+		conn, err := dialer.DialContext(context.Background(), "tcp", "127.0.0.1:1")
 		if err == nil {
 			_ = conn.Close()
 		}
@@ -98,7 +98,7 @@ func TestDialFallsBackToV1WithoutServerSettings(t *testing.T) {
 	defer dialer.(*Dialer).Close()
 
 	start := time.Now()
-	conn, err := dialer.Dial("tcp", "127.0.0.1:1")
+	conn, err := dialer.DialContext(context.Background(), "tcp", "127.0.0.1:1")
 	if err != nil {
 		t.Fatal(err)
 	}

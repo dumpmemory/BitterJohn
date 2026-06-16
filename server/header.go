@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/daeuniverse/softwind/protocol"
+	"github.com/daeuniverse/outbound/protocol"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/common"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/config"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/SweetLisa/model"
@@ -21,14 +21,14 @@ func GetHeader(out model.Out, lisa *config.Lisa) (header *protocol.Header, err e
 		tlsConfig *tls.Config
 		flags     protocol.Flags
 	)
-	switch out.Protocol {
-	case protocol.ProtocolVMessTlsGrpc:
+	switch string(out.Protocol) {
+	case string(protocol.ProtocolVMessTlsGrpc):
 		feature1 = common.SimplyGetParam(out.Method, "serviceName")
 		sni, _ = common.HostToSNI(out.Host, lisa.Host)
 		flags = protocol.Flags_VMess_UsePacketAddr
-	case protocol.ProtocolVMessTCP:
+	case string(protocol.ProtocolVMessTCP):
 		flags = protocol.Flags_VMess_UsePacketAddr
-	case protocol.ProtocolJuicity:
+	case string(protocol.ProtocolJuicity):
 		feature1 = "bbr"
 		pinnedHash, err := base64.URLEncoding.DecodeString(common.SimplyGetParam(out.Method, "pinned_certchain_sha256"))
 		if err != nil {
@@ -47,7 +47,7 @@ func GetHeader(out model.Out, lisa *config.Lisa) (header *protocol.Header, err e
 				return nil
 			},
 		}
-	case ProtocolAnyTLS:
+	case string(ProtocolAnyTLS):
 		sni = common.SimplyGetParam(out.Method, "sni")
 		if sni == "" {
 			if sni, err = common.HostToSNI(out.Host, lisa.Host); err != nil {

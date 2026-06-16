@@ -20,16 +20,16 @@ import (
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/SweetLisa/model"
 	jsoniter "github.com/json-iterator/go"
 
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/pool"
-	"github.com/daeuniverse/softwind/protocol"
-	"github.com/daeuniverse/softwind/protocol/direct"
-	"github.com/daeuniverse/softwind/protocol/juicity"
-	"github.com/daeuniverse/softwind/protocol/trojanc"
-	"github.com/daeuniverse/softwind/protocol/tuic"
-	"github.com/daeuniverse/softwind/protocol/tuic/common"
+	"github.com/daeuniverse/outbound/netproxy"
+	"github.com/daeuniverse/outbound/pool"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/direct"
+	"github.com/daeuniverse/outbound/protocol/juicity"
+	"github.com/daeuniverse/outbound/protocol/trojanc"
+	"github.com/daeuniverse/outbound/protocol/tuic"
+	"github.com/daeuniverse/outbound/protocol/tuic/common"
+	"github.com/daeuniverse/quic-go"
 	"github.com/google/uuid"
-	"github.com/mzz2017/quic-go"
 )
 
 const (
@@ -61,7 +61,7 @@ func New(opts *Options) (*Server, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse send_through: %w", err)
 		}
-		dialer = direct.NewDirectDialerLaddr(true, lAddr)
+		dialer = direct.NewDirectDialerLaddr(lAddr, direct.Option{FullCone: true})
 	}
 	ctx, close := context.WithCancel(context.Background())
 	return &Server{
@@ -192,14 +192,11 @@ func (s *Server) handleStream(ctx context.Context, authCtx context.Context, id *
 		}
 	}
 	target := net.JoinHostPort(mdata.Hostname, strconv.Itoa(int(mdata.Port)))
-	d := &netproxy.ContextDialerConverter{
-		Dialer: dialer,
-	}
 	ctx, cancel := context.WithTimeout(ctx, server.DialTimeout)
 	defer cancel()
 	switch mdata.Network {
 	case "tcp":
-		rConn, err := d.DialContext(ctx, "tcp", target)
+		rConn, err := dialer.DialContext(ctx, "tcp", target)
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
@@ -227,7 +224,7 @@ func (s *Server) handleStream(ctx context.Context, authCtx context.Context, id *
 			return fmt.Errorf("ReadFrom: %w", err)
 		}
 
-		c, err := d.DialContext(ctx, "udp", addr.String())
+		c, err := dialer.DialContext(ctx, "udp", addr.String())
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {

@@ -4,7 +4,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/daeuniverse/softwind/netproxy"
+	"github.com/daeuniverse/outbound/netproxy"
 )
 
 type anyAddr string

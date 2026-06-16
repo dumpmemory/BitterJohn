@@ -10,11 +10,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/daeuniverse/softwind/ciphers"
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/pool"
-	"github.com/daeuniverse/softwind/protocol"
-	"github.com/daeuniverse/softwind/protocol/shadowsocks"
+	"github.com/daeuniverse/outbound/ciphers"
+	"github.com/daeuniverse/outbound/pool"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/shadowsocks"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/config"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/pkg/bufferred_conn"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/pkg/log"
@@ -157,12 +156,9 @@ func (s *Server) handleTCP(conn net.Conn) error {
 			return err
 		}
 	}
-	d := &netproxy.ContextDialerConverter{
-		Dialer: dialer,
-	}
 	ctx, cancel := context.WithTimeout(context.TODO(), server.DialTimeout)
 	defer cancel()
-	rConn, err := d.DialContext(ctx, "tcp", target)
+	rConn, err := dialer.DialContext(ctx, "tcp", target)
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {

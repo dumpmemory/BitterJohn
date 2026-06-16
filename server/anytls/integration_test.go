@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/protocol"
-	"github.com/daeuniverse/softwind/protocol/direct"
+	"github.com/daeuniverse/outbound/netproxy"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/direct"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/SweetLisa/model"
 )
@@ -29,7 +29,7 @@ func TestDialerRelaysTCPThroughServer(t *testing.T) {
 	if err := srv.AddPassages([]server.Passage{{
 		Passage: model.Passage{
 			In: model.In{Argument: model.Argument{
-				Protocol: server.ProtocolAnyTLS,
+				Protocol: "anytls",
 				Password: "secret-password",
 			}},
 		},
@@ -55,7 +55,7 @@ func TestDialerRelaysTCPThroughServer(t *testing.T) {
 	}
 	defer dialer.(*Dialer).Close()
 
-	conn, err := dialer.Dial("tcp", echoAddr)
+	conn, err := dialer.DialContext(context.Background(), "tcp", echoAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestDialerRelaysUDPThroughServer(t *testing.T) {
 	if err := srv.AddPassages([]server.Passage{{
 		Passage: model.Passage{
 			In: model.In{Argument: model.Argument{
-				Protocol: server.ProtocolAnyTLS,
+				Protocol: "anytls",
 				Password: "secret-password",
 			}},
 		},
@@ -112,7 +112,7 @@ func TestDialerRelaysUDPThroughServer(t *testing.T) {
 	}
 	defer dialer.(*Dialer).Close()
 
-	conn, err := dialer.Dial("udp", udpAddr.String())
+	conn, err := dialer.DialContext(context.Background(), "udp", udpAddr.String())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/daeuniverse/softwind/protocol"
+	"github.com/daeuniverse/outbound/protocol"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/config"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/SweetLisa/model"
 )
@@ -36,7 +36,7 @@ func TestGetHeaderAnyTLSConfigVariants(t *testing.T) {
 				Host: "203.0.113.8",
 				Port: "443",
 				Argument: model.Argument{
-					Protocol: ProtocolAnyTLS,
+					Protocol: "anytls",
 					Password: "secret-password",
 					Method:   "sni=cdn.example.com",
 				},
@@ -50,7 +50,7 @@ func TestGetHeaderAnyTLSConfigVariants(t *testing.T) {
 				Host: "edge.example.net",
 				Port: "8443",
 				Argument: model.Argument{
-					Protocol: ProtocolAnyTLS,
+					Protocol: "anytls",
 					Password: "secret-password",
 				},
 			},
@@ -63,7 +63,7 @@ func TestGetHeaderAnyTLSConfigVariants(t *testing.T) {
 				Host: "203.0.113.8",
 				Port: "9443",
 				Argument: model.Argument{
-					Protocol: ProtocolAnyTLS,
+					Protocol: "anytls",
 					Password: "secret-password",
 				},
 			},
@@ -76,7 +76,7 @@ func TestGetHeaderAnyTLSConfigVariants(t *testing.T) {
 				Host: "2001:db8::1",
 				Port: "9443",
 				Argument: model.Argument{
-					Protocol: ProtocolAnyTLS,
+					Protocol: "anytls",
 					Password: "secret-password",
 					Method:   "sni=edge.example.com",
 				},
@@ -90,7 +90,7 @@ func TestGetHeaderAnyTLSConfigVariants(t *testing.T) {
 				Host: "2001:db8::1",
 				Port: "9443",
 				Argument: model.Argument{
-					Protocol: ProtocolAnyTLS,
+					Protocol: "anytls",
 					Password: "secret-password",
 				},
 			},

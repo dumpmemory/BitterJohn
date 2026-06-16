@@ -7,8 +7,8 @@ import (
 	"net"
 	"testing"
 
-	"github.com/daeuniverse/softwind/protocol"
-	"github.com/daeuniverse/softwind/protocol/direct"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/direct"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/SweetLisa/model"
 )
@@ -80,7 +80,7 @@ func anyTLSPassage(password string) server.Passage {
 	return server.Passage{
 		Passage: model.Passage{
 			In: model.In{Argument: model.Argument{
-				Protocol: server.ProtocolAnyTLS,
+				Protocol: "anytls",
 				Password: password,
 			}},
 		},

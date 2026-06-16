@@ -1,7 +1,7 @@
 package bufferred_conn
 
 import (
-	"github.com/daeuniverse/softwind/pkg/zeroalloc/bufio"
+	"github.com/daeuniverse/outbound/pkg/zeroalloc/bufio"
 	"net"
 )
 

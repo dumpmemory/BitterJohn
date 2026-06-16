@@ -9,8 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/protocol"
+	"github.com/daeuniverse/outbound/netproxy"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/api"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/common"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/config"
@@ -154,7 +153,7 @@ func (s *Server) register() error {
 		Hosts:  s.arg.Hostnames,
 		Port:   s.arg.Port,
 		Argument: model.Argument{
-			Protocol: protocol.ProtocolJuicity,
+			Protocol: "juicity",
 			Username: manager.In.Username,
 			Password: manager.In.Password,
 			Method:   "pinned_certchain_sha256=" + s.pinnedCertchainSha256,

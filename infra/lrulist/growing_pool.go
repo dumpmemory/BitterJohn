@@ -1,7 +1,7 @@
 package lrulist
 
 import (
-	"github.com/daeuniverse/softwind/pool"
+	"github.com/daeuniverse/outbound/pool"
 	"sync"
 )
 

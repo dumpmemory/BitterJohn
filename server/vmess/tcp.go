@@ -12,11 +12,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/daeuniverse/softwind/netproxy"
+	"github.com/daeuniverse/outbound/netproxy"
 
-	"github.com/daeuniverse/softwind/pool"
-	"github.com/daeuniverse/softwind/protocol"
-	"github.com/daeuniverse/softwind/protocol/vmess"
+	"github.com/daeuniverse/outbound/pool"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/vmess"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/config"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/pkg/log"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
@@ -84,14 +84,11 @@ func (s *Server) handleConn(conn net.Conn) error {
 			return err
 		}
 	}
-	d := &netproxy.ContextDialerConverter{
-		Dialer: dialer,
-	}
 	ctx, cancel := context.WithTimeout(context.TODO(), server.DialTimeout)
 	defer cancel()
 	switch targetMetadata.Network {
 	case "tcp":
-		rConn, err := d.DialContext(ctx, "tcp", target)
+		rConn, err := dialer.DialContext(ctx, "tcp", target)
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
@@ -120,7 +117,7 @@ func (s *Server) handleConn(conn net.Conn) error {
 		}
 		// log.Debug("vmess dial udp to %v, write to %v", target, addr)
 
-		c, err := d.DialContext(ctx, "udp", addr.String())
+		c, err := dialer.DialContext(ctx, "udp", addr.String())
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {

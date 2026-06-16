@@ -6,11 +6,11 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/daeuniverse/softwind/netproxy"
-	proto "github.com/daeuniverse/softwind/pkg/gun_proto"
-	"github.com/daeuniverse/softwind/protocol"
-	"github.com/daeuniverse/softwind/protocol/vmess"
-	grpc2 "github.com/daeuniverse/softwind/transport/grpc"
+	"github.com/daeuniverse/outbound/netproxy"
+	proto "github.com/daeuniverse/outbound/pkg/gun_proto"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/vmess"
+	grpc2 "github.com/daeuniverse/outbound/transport/grpc"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/api"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/common"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/config"
@@ -252,7 +252,7 @@ func LocalizePassages(passages []server.Passage) (psgs []Passage, manager *Passa
 		}
 		psgs[i].inCmdKey = vmess.NewID(id).CmdKey()
 		psgs[i].inEAuthIDBlock, _ = aes.NewCipher(vmess.KDF(psgs[i].inCmdKey, []byte(vmess.KDFSaltConstAuthIDEncryptionKey))[:16])
-		if psg.Out != nil && psg.Out.Protocol == protocol.ProtocolVMessTCP {
+		if psg.Out != nil && string(psg.Out.Protocol) == string(protocol.ProtocolVMessTCP) {
 			id, err := uuid.Parse(psgs[i].Out.Password)
 			if err != nil {
 				log.Warn("LocalizePassages: invalid uuid: %v", psgs[i].In.Password)
@@ -401,16 +401,22 @@ func (s *Server) register() error {
 	if err != nil {
 		return err
 	}
+	argument := model.Argument{
+		Password: manager.In.Password,
+		Method:   "serviceName=" + common.GenServiceName([]byte(config.ParamsObj.John.Ticket)),
+	}
+	switch s.protocol {
+	case protocol.ProtocolVMessTCP:
+		argument.Protocol = "vmess"
+	case protocol.ProtocolVMessTlsGrpc:
+		argument.Protocol = "vmess+tls+grpc"
+	}
 	cdnNames, users, err := api.Register(ctx, s.sweetLisa.Host, validateToken, model.Server{
-		Ticket: s.arg.Ticket,
-		Name:   s.arg.ServerName,
-		Hosts:  s.arg.Hostnames,
-		Port:   s.arg.Port,
-		Argument: model.Argument{
-			Protocol: s.protocol,
-			Password: manager.In.Password,
-			Method:   "serviceName=" + common.GenServiceName([]byte(config.ParamsObj.John.Ticket)),
-		},
+		Ticket:         s.arg.Ticket,
+		Name:           s.arg.ServerName,
+		Hosts:          s.arg.Hostnames,
+		Port:           s.arg.Port,
+		Argument:       argument,
 		BandwidthLimit: bandwidthLimit,
 		NoRelay:        s.arg.NoRelay,
 	})

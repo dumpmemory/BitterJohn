@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/protocol"
+	"github.com/daeuniverse/outbound/netproxy"
+	"github.com/daeuniverse/outbound/protocol"
 	bjserver "github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
 )
 
@@ -62,23 +62,27 @@ func NewDialer(nextDialer netproxy.Dialer, header protocol.Header) (netproxy.Dia
 }
 
 func (d *Dialer) Dial(network string, addr string) (netproxy.Conn, error) {
+	return d.DialContext(context.Background(), network, addr)
+}
+
+func (d *Dialer) DialContext(ctx context.Context, network string, addr string) (netproxy.Conn, error) {
 	magicNetwork, err := netproxy.ParseMagicNetwork(network)
 	if err != nil {
 		return nil, err
 	}
 	switch magicNetwork.Network {
 	case "tcp":
-		stream, session, err := d.openStream(context.Background(), addr)
+		stream, session, err := d.openStream(ctx, addr)
 		if err != nil {
 			return nil, err
 		}
-		if err := waitStreamReady(context.Background(), session, stream); err != nil {
+		if err := waitStreamReady(ctx, session, stream); err != nil {
 			_ = stream.Close()
 			return nil, err
 		}
 		return stream, nil
 	case "udp":
-		stream, session, err := d.openStream(context.Background(), net.JoinHostPort(uotMagicAddress, "0"))
+		stream, session, err := d.openStream(ctx, net.JoinHostPort(uotMagicAddress, "0"))
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +95,7 @@ func (d *Dialer) Dial(network string, addr string) (netproxy.Conn, error) {
 			_ = stream.Close()
 			return nil, err
 		}
-		if err := waitStreamReady(context.Background(), session, stream); err != nil {
+		if err := waitStreamReady(ctx, session, stream); err != nil {
 			_ = stream.Close()
 			return nil, err
 		}
@@ -157,8 +161,7 @@ func (d *Dialer) getSession(ctx context.Context) (*Session, error) {
 		return d.session, nil
 	}
 
-	dialer := &netproxy.ContextDialerConverter{Dialer: d.nextDialer}
-	rawConn, err := dialer.DialContext(ctx, "tcp", d.proxyAddress)
+	rawConn, err := d.nextDialer.DialContext(ctx, "tcp", d.proxyAddress)
 	if err != nil {
 		return nil, err
 	}

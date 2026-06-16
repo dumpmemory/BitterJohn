@@ -8,8 +8,8 @@ import (
 type Passage struct {
 	server.Passage
 
-	inCmdKey      []byte
-	outCmdKey     []byte
+	inCmdKey  []byte
+	outCmdKey []byte
 
 	inEAuthIDBlock cipher.Block
 }

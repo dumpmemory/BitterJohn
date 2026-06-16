@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daeuniverse/softwind/netproxy"
+	"github.com/daeuniverse/outbound/netproxy"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
 )
 
@@ -238,8 +238,5 @@ func resolveTargetAddr(target socksAddr) netip.AddrPort {
 func dialWithTimeout(dialer netproxy.Dialer, network string, addr string) (netproxy.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), server.DialTimeout)
 	defer cancel()
-	if contextDialer, ok := dialer.(netproxy.ContextDialer); ok {
-		return contextDialer.DialContext(ctx, network, addr)
-	}
-	return (&netproxy.ContextDialerConverter{Dialer: dialer}).DialContext(ctx, network, addr)
+	return dialer.DialContext(ctx, network, addr)
 }

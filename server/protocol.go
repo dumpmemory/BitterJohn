@@ -1,13 +1,15 @@
 package server
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/protocol"
+	"github.com/daeuniverse/outbound/netproxy"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/direct"
 )
 
 const (
@@ -15,6 +17,10 @@ const (
 )
 
 const ProtocolAnyTLS protocol.Protocol = "anytls"
+
+func init() {
+	direct.InitDirectDialers("")
+}
 
 type evictableDialer struct {
 	netproxy.Dialer
@@ -41,7 +47,7 @@ func NewDialer(name string, nextDialer netproxy.Dialer, header *protocol.Header)
 			header.Cipher,
 			header.SNI,
 			strconv.Itoa(int(header.Flags)),
-			header.Feature1,
+			fmt.Sprint(header.Feature1),
 		}, ":")
 		muDialerMap.Lock()
 		ed, ok := dialerMap[key]

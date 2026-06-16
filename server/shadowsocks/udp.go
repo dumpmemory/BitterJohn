@@ -8,11 +8,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/daeuniverse/softwind/ciphers"
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/pool"
-	"github.com/daeuniverse/softwind/protocol"
-	"github.com/daeuniverse/softwind/protocol/shadowsocks"
+	"github.com/daeuniverse/outbound/ciphers"
+	"github.com/daeuniverse/outbound/pool"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/shadowsocks"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/infra/ip_mtu_trie"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/pkg/log"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
@@ -101,12 +100,9 @@ func (s *Server) GetOrBuildUDPConn(lAddr net.Addr, data []byte) (rc net.PacketCo
 				return nil, nil, nil, "", err
 			}
 		}
-		d := &netproxy.ContextDialerConverter{
-			Dialer: dialer,
-		}
 		ctx, cancel := context.WithTimeout(context.TODO(), server.DialTimeout)
 		defer cancel()
-		c, err := d.DialContext(ctx, "udp", target)
+		c, err := dialer.DialContext(ctx, "udp", target)
 		if err != nil {
 			s.nm.Lock()
 			s.nm.Remove(connIdent) // close channel to inform that establishment ends
@@ -216,7 +212,7 @@ func (s *Server) relay(laddr net.Addr, rConn net.PacketConn, timeout time.Durati
 			continue
 		}
 		salt := sg.Get()
-		shadowBytes, err = shadowsocks.EncryptUDPFromPool(inKey, buf[:n], salt)
+		shadowBytes, err = shadowsocks.EncryptUDPFromPool(&inKey, buf[:n], salt, nil)
 		pool.Put(salt)
 		if err != nil {
 			log.Warn("relay: EncryptUDPFromPool: %v", err)

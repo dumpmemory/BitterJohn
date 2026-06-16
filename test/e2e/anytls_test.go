@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/protocol"
-	"github.com/daeuniverse/softwind/protocol/direct"
+	"github.com/daeuniverse/outbound/netproxy"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/direct"
 	bjserver "github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
 	anytlsserver "github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server/anytls"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/SweetLisa/model"
@@ -66,7 +66,7 @@ func TestAnyTLSOfficialServerWithBitterJohnClientTCP(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dialer := newBitterJohnAnyTLSDialer(t, container.Addr, anyTLSPassword, tt.configure)
-			conn, err := dialer.Dial("tcp", echoAddr)
+			conn, err := dialer.DialContext(context.Background(), "tcp", echoAddr)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,7 +79,7 @@ func TestAnyTLSOfficialServerWithBitterJohnClientTCP(t *testing.T) {
 	t.Run("reuse session for multiple tcp streams", func(t *testing.T) {
 		dialer := newBitterJohnAnyTLSDialer(t, container.Addr, anyTLSPassword, nil)
 		for i := 0; i < 3; i++ {
-			conn, err := dialer.Dial("tcp", echoAddr)
+			conn, err := dialer.DialContext(context.Background(), "tcp", echoAddr)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -95,7 +95,7 @@ func TestAnyTLSOfficialServerWithBitterJohnClientTCP(t *testing.T) {
 		t.Cleanup(closePayloadEcho)
 
 		dialer := newBitterJohnAnyTLSDialer(t, container.Addr, anyTLSPassword, nil)
-		conn, err := dialer.Dial("tcp", payloadAddr)
+		conn, err := dialer.DialContext(context.Background(), "tcp", payloadAddr)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +130,7 @@ func TestAnyTLSOfficialServerWithBitterJohnClientUDP(t *testing.T) {
 		t.Cleanup(func() { _ = closer.Close() })
 	}
 
-	conn, err := dialer.Dial("udp", echoAddr)
+	conn, err := dialer.DialContext(context.Background(), "udp", echoAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func startBitterJohnAnyTLSServer(t *testing.T, password string) string {
 	if err := srv.AddPassages([]bjserver.Passage{{
 		Passage: model.Passage{
 			In: model.In{Argument: model.Argument{
-				Protocol: bjserver.ProtocolAnyTLS,
+				Protocol: "anytls",
 				Password: password,
 			}},
 		},
@@ -588,7 +588,7 @@ func assertPingPong(t *testing.T, conn rwConn) {
 func assertDialPingPongFails(t *testing.T, dialer netproxy.Dialer, network string, addr string) {
 	t.Helper()
 
-	conn, err := dialer.Dial(network, addr)
+	conn, err := dialer.DialContext(context.Background(), network, addr)
 	if err != nil {
 		return
 	}

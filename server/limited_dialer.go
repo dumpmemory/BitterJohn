@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -9,8 +10,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/pool"
+	"github.com/daeuniverse/outbound/netproxy"
+	"github.com/daeuniverse/outbound/pool"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/common"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/config"
 	"golang.org/x/net/dns/dnsmessage"
@@ -82,6 +83,10 @@ func (d *PrivateLimitedDialer) DialUdp(addr string) (netproxy.PacketConn, error)
 }
 
 func (d *PrivateLimitedDialer) Dial(network, addr string) (c netproxy.Conn, err error) {
+	return d.DialContext(context.Background(), network, addr)
+}
+
+func (d *PrivateLimitedDialer) DialContext(ctx context.Context, network, addr string) (c netproxy.Conn, err error) {
 	mn, err := netproxy.ParseMagicNetwork(network)
 	if err != nil {
 		return nil, err
@@ -96,7 +101,7 @@ func (d *PrivateLimitedDialer) Dial(network, addr string) (c netproxy.Conn, err 
 			network = "tcp6"
 		default:
 		}
-		return d.netDialer.Dial(network, addr)
+		return d.netDialer.DialContext(ctx, network, addr)
 	case strings.HasPrefix(network, "udp"):
 		switch d.forceNetwork {
 		case Force4:
@@ -112,7 +117,7 @@ func (d *PrivateLimitedDialer) Dial(network, addr string) (c netproxy.Conn, err 
 			}
 			return &PrivateLimitedUDPConn{UDPConn: conn, FullCone: true}, nil
 		} else {
-			conn, err := d.netDialer.Dial(network, addr)
+			conn, err := d.netDialer.DialContext(ctx, network, addr)
 			if err != nil {
 				return nil, err
 			}

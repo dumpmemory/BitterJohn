@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daeuniverse/softwind/ciphers"
-	common2 "github.com/daeuniverse/softwind/common"
-	"github.com/daeuniverse/softwind/netproxy"
-	"github.com/daeuniverse/softwind/pool"
-	"github.com/daeuniverse/softwind/protocol"
-	"github.com/daeuniverse/softwind/protocol/shadowsocks"
+	"github.com/daeuniverse/outbound/ciphers"
+	common2 "github.com/daeuniverse/outbound/common"
+	"github.com/daeuniverse/outbound/netproxy"
+	"github.com/daeuniverse/outbound/pool"
+	"github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/shadowsocks"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/api"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/common"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/config"
@@ -151,7 +151,7 @@ func (s *Server) register() error {
 		Hosts:  s.arg.Hostnames,
 		Port:   s.arg.Port,
 		Argument: model.Argument{
-			Protocol: protocol.ProtocolShadowsocks,
+			Protocol: "shadowsocks",
 			Password: manager.In.Password,
 			Method:   manager.In.Method,
 		},

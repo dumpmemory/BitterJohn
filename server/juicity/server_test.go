@@ -1,15 +1,24 @@
 package juicity
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/daeuniverse/outbound/netproxy"
+	outprotocol "github.com/daeuniverse/outbound/protocol"
+	"github.com/daeuniverse/outbound/protocol/direct"
+	bjserver "github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
+	"github.com/e14914c0-6759-480d-be89-66b7b7676451/SweetLisa/model"
 )
 
 func TestCloseStopsServe(t *testing.T) {
@@ -66,6 +75,72 @@ func TestLastAliveAccessIsSafeForConcurrentReadersAndWriters(t *testing.T) {
 	}
 }
 
+func TestOutboundJuicityDialerRelaysTCPThroughServer(t *testing.T) {
+	echoAddr, closeEcho := startJuicityTCPEchoServer(t)
+	defer closeEcho()
+
+	s, addr, closeServer := startJuicityServerWithPassage(t)
+	defer closeServer()
+
+	dialer := newOutboundJuicityDialer(t, addr, testJuicityUser, testJuicityPassword)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := dialer.DialContext(ctx, "tcp", echoAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(buf), "pong"; got != want {
+		t.Fatalf("tcp relay response = %q, want %q", got, want)
+	}
+	if len(s.Passages()) != 1 {
+		t.Fatalf("server passages changed during relay: %d", len(s.Passages()))
+	}
+}
+
+func TestOutboundJuicityDialerRelaysUDPThroughServer(t *testing.T) {
+	udpAddr, closeUDP := startJuicityUDPEchoServer(t)
+	defer closeUDP()
+
+	_, addr, closeServer := startJuicityServerWithPassage(t)
+	defer closeServer()
+
+	dialer := newOutboundJuicityDialer(t, addr, testJuicityUser, testJuicityPassword)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := dialer.DialContext(ctx, "udp", udpAddr.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	packetConn := conn.(netproxy.PacketConn)
+	if _, err := packetConn.WriteTo([]byte("ping"), udpAddr.String()); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 4)
+	n, addrPort, err := packetConn.ReadFrom(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 4 || string(buf[:n]) != "pong" {
+		t.Fatalf("udp relay response = %q, want %q", string(buf[:n]), "pong")
+	}
+	if addrPort.String() != udpAddr.String() {
+		t.Fatalf("udp response addr = %v, want %v", addrPort, udpAddr)
+	}
+}
+
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	cert, key := testCertificate(t)
@@ -78,6 +153,121 @@ func newTestServer(t *testing.T) *Server {
 		t.Fatalf("New() error = %v", err)
 	}
 	return s
+}
+
+const (
+	testJuicityUser     = "28446de9-2a7e-4fab-827b-6df93e46f945"
+	testJuicityPassword = "juicity-password"
+)
+
+func startJuicityServerWithPassage(t *testing.T) (*Server, string, func()) {
+	t.Helper()
+	s := newTestServer(t)
+	if err := s.AddPassages([]bjserver.Passage{{
+		Passage: model.Passage{In: model.In{Argument: model.Argument{
+			Protocol: "juicity",
+			Username: testJuicityUser,
+			Password: testJuicityPassword,
+		}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	addr := freeUDPAddr(t)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Serve(addr)
+	}()
+	if !eventually(time.Second, func() bool {
+		return s.getListener() != nil
+	}) {
+		t.Fatal("listener was not assigned to the server")
+	}
+	return s, addr, func() {
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("juicity server did not stop")
+		}
+	}
+}
+
+func newOutboundJuicityDialer(t *testing.T, proxyAddr, user, password string) netproxy.Dialer {
+	t.Helper()
+	direct.InitDirectDialers("")
+	dialer, err := bjserver.NewDialer("juicity", direct.FullconeDirect, &outprotocol.Header{
+		ProxyAddress: proxyAddr,
+		User:         user,
+		Password:     password,
+		Feature1:     "bbr",
+		TlsConfig: &tls.Config{
+			NextProtos:         []string{"h3"},
+			MinVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true,
+		},
+		IsClient: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dialer
+}
+
+func startJuicityTCPEchoServer(t *testing.T) (string, func()) {
+	t.Helper()
+	lt, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := lt.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var buf [4]byte
+		if _, err := io.ReadFull(conn, buf[:]); err != nil {
+			return
+		}
+		if string(buf[:]) == "ping" {
+			_, _ = conn.Write([]byte("pong"))
+		}
+	}()
+	return lt.Addr().String(), func() {
+		_ = lt.Close()
+		<-done
+	}
+}
+
+func startJuicityUDPEchoServer(t *testing.T) (net.Addr, func()) {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, 1500)
+		n, addr, err := conn.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		if string(buf[:n]) == "ping" {
+			_, _ = conn.WriteTo([]byte("pong"), addr)
+		}
+	}()
+	return conn.LocalAddr(), func() {
+		_ = conn.Close()
+		<-done
+	}
 }
 
 func freeUDPAddr(t *testing.T) string {
