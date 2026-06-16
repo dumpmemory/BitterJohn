@@ -122,6 +122,33 @@ func TestServer_AddPassages(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedPassageSurvivesHotSync(t *testing.T) {
+	s := Server{
+		userContextPool: (*UserContextPool)(lru.New(lru.FixedTimeout, int64(1*time.Hour))),
+	}
+
+	alpha := shadowsocksTestPassage("alpha", "alpha-password")
+	bravo := shadowsocksTestPassage("bravo", "bravo-password")
+	if err := s.AddPassages([]server.Passage{alpha, bravo}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := s.GetUserContextOrInsert("127.0.0.1")
+	passage, _ := ctx.Auth(func(passage *Passage) ([]byte, bool) {
+		return nil, passage.In.From == alpha.In.From
+	})
+	if passage == nil {
+		t.Fatal("alpha passage was not found")
+	}
+
+	if err := s.RemovePassages([]server.Passage{alpha}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := passage.In.From, alpha.In.From; got != want {
+		t.Fatalf("authenticated passage changed after sync: got %q, want %q", got, want)
+	}
+}
+
 func TestServer(t *testing.T) {
 	bloom, err := disk_bloom.NewGroup("/tmp/bloom_*", disk_bloom.FsyncModeNo, 1e3, 1e-6, func(b []byte) (uint64, uint64) {
 		hx := fnv.New64()
@@ -171,6 +198,20 @@ func TestServer(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ListenTCP did not return after Close")
+	}
+}
+
+func shadowsocksTestPassage(from, password string) server.Passage {
+	return server.Passage{
+		Passage: model.Passage{
+			In: model.In{
+				From: from,
+				Argument: model.Argument{
+					Method:   "aes-256-gcm",
+					Password: password,
+				},
+			},
+		},
 	}
 }
 

@@ -319,10 +319,7 @@ func (s *Server) Close() error {
 func (s *Server) addPassages(passages []Passage) {
 	s.passages = append(s.passages, passages...)
 
-	var vals []interface{}
-	for i := range passages {
-		vals = append(vals, &passages[i])
-	}
+	vals := stablePassageRefs(passages)
 	socketIdents := s.userContextPool.Infra().GetKeys()
 	for _, ident := range socketIdents {
 		userContext := s.userContextPool.Infra().Get(ident).(*UserContext).Infra()

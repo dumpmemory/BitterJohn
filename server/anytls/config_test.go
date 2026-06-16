@@ -49,6 +49,33 @@ func TestServerPassageConfigLifecycle(t *testing.T) {
 	requireAuthPassword(t, srv, managerPassword)
 }
 
+func TestAuthenticatedPassageSurvivesHotSync(t *testing.T) {
+	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srvIface.Close()
+	srv := srvIface.(*Server)
+
+	alpha := anyTLSPassage("alpha-password")
+	bravo := anyTLSPassage("bravo-password")
+	if err := srv.AddPassages([]server.Passage{alpha, bravo}); err != nil {
+		t.Fatal(err)
+	}
+
+	passage, err := authPassword(t, srv, alpha.In.Password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.RemovePassages([]server.Passage{alpha}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := passage.In.Password, alpha.In.Password; got != want {
+		t.Fatalf("authenticated passage password changed after sync: got %q, want %q", got, want)
+	}
+}
+
 func anyTLSPassage(password string) server.Passage {
 	return server.Passage{
 		Passage: model.Passage{

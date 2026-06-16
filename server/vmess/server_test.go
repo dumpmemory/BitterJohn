@@ -81,6 +81,36 @@ func TestCloseClosesClosedChannel(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedPassageSurvivesHotSync(t *testing.T) {
+	doubleCuckoo := vmess.NewReplayFilter(120)
+	svr, err := New(context.WithValue(context.Background(), "doubleCuckoo", doubleCuckoo), direct.SymmetricDirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := svr.(*Server)
+
+	alpha := vmessTestPassage("alpha", "28446de9-2a7e-4fab-827b-6df93e46f945")
+	bravo := vmessTestPassage("bravo", "38446de9-2a7e-4fab-827b-6df93e46f945")
+	if err := s.AddPassages([]server.Passage{alpha, bravo}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := s.GetUserContextOrInsert("127.0.0.1")
+	passage, _ := ctx.Auth(func(passage *Passage) ([]byte, bool) {
+		return nil, passage.In.From == alpha.In.From
+	})
+	if passage == nil {
+		t.Fatal("alpha passage was not found")
+	}
+
+	if err := s.RemovePassages([]server.Passage{alpha}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := passage.In.From, alpha.In.From; got != want {
+		t.Fatalf("authenticated passage changed after sync: got %q, want %q", got, want)
+	}
+}
+
 func TestGrpcServer(t *testing.T) {
 	log.SetLogLevel("trace")
 	doubleCuckoo := vmess.NewReplayFilter(120)
@@ -128,6 +158,20 @@ func TestGrpcServer(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("grpc Serve did not return after Stop")
+	}
+}
+
+func vmessTestPassage(from, password string) server.Passage {
+	return server.Passage{
+		Passage: model.Passage{
+			In: model.In{
+				From: from,
+				Argument: model.Argument{
+					Protocol: "vmess",
+					Password: password,
+				},
+			},
+		},
 	}
 }
 

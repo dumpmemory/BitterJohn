@@ -1,6 +1,7 @@
 package anytls
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -78,11 +79,10 @@ type udpPacketConn struct {
 }
 
 func newUDPPacketConn(stream *Stream, target socksAddr) *udpPacketConn {
-	addrPort, _ := netip.ParseAddrPort(target.String())
 	return &udpPacketConn{
 		stream:     stream,
 		target:     target,
-		targetAddr: addrPort,
+		targetAddr: resolveTargetAddr(target),
 	}
 }
 
@@ -156,7 +156,7 @@ func (s *Server) handleUOT(stream *Stream, passage *Passage) error {
 		}
 	}
 
-	conn, err := dialer.Dial("udp", req.Destination.String())
+	conn, err := dialWithTimeout(dialer, "udp", req.Destination.String())
 	if err != nil {
 		return err
 	}
@@ -217,4 +217,29 @@ func isIgnorableUOTError(err error) bool {
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func resolveTargetAddr(target socksAddr) netip.AddrPort {
+	addrPort, err := netip.ParseAddrPort(target.String())
+	if err == nil {
+		return addrPort
+	}
+	udpAddr, err := net.ResolveUDPAddr("udp", target.String())
+	if err != nil || udpAddr == nil {
+		return netip.AddrPort{}
+	}
+	addr, ok := netip.AddrFromSlice(udpAddr.IP)
+	if !ok {
+		return netip.AddrPort{}
+	}
+	return netip.AddrPortFrom(addr.Unmap(), uint16(udpAddr.Port))
+}
+
+func dialWithTimeout(dialer netproxy.Dialer, network string, addr string) (netproxy.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), server.DialTimeout)
+	defer cancel()
+	if contextDialer, ok := dialer.(netproxy.ContextDialer); ok {
+		return contextDialer.DialContext(ctx, network, addr)
+	}
+	return (&netproxy.ContextDialerConverter{Dialer: dialer}).DialContext(ctx, network, addr)
 }

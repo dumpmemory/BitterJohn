@@ -44,12 +44,18 @@ func NewUserContext(passages []Passage) *UserContext {
 	basicInterval := 10 * time.Second
 	offsetRange := 6.0
 	offset := time.Duration((fastrand.Float64()-0.5)*offsetRange*1000) * time.Millisecond
-	var list = make([]interface{}, len(passages))
-	for i := range passages {
-		list[i] = &passages[i]
-	}
-	ctx := lrulist.NewWithList(basicInterval+offset, lrulist.InsertFront, list)
+	ctx := lrulist.NewWithList(basicInterval+offset, lrulist.InsertFront, stablePassageRefs(passages))
 	return (*UserContext)(ctx)
+}
+
+func stablePassageRefs(passages []Passage) []interface{} {
+	list := make([]interface{}, len(passages))
+	for i := range passages {
+		passage := new(Passage)
+		*passage = passages[i]
+		list[i] = passage
+	}
+	return list
 }
 
 func (s *Server) GetUserContextOrInsert(userIP string) *UserContext {

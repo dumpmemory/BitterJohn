@@ -39,7 +39,7 @@ type Server struct {
 
 	mutex    sync.Mutex
 	passages []Passage
-	users    map[[sha256.Size]byte]*Passage
+	users    map[[sha256.Size]byte]Passage
 
 	passageContentionCache *server.ContentionCache
 	lastAliveMu            sync.RWMutex
@@ -67,7 +67,7 @@ func New(valueCtx context.Context, dialer netproxy.Dialer) (server.Server, error
 	return &Server{
 		dialer:    dialer,
 		tlsConfig: tlsConfig,
-		users:     make(map[[sha256.Size]byte]*Passage),
+		users:     make(map[[sha256.Size]byte]Passage),
 		ctx:       ctx,
 		cancel:    cancel,
 	}, nil
@@ -220,9 +220,9 @@ func (s *Server) removePassagesFuncLocked(f func(*Passage) bool) {
 }
 
 func (s *Server) rebuildUsersLocked() {
-	s.users = make(map[[sha256.Size]byte]*Passage, len(s.passages))
+	s.users = make(map[[sha256.Size]byte]Passage, len(s.passages))
 	for i := range s.passages {
-		s.users[s.passages[i].passwordHash] = &s.passages[i]
+		s.users[s.passages[i].passwordHash] = s.passages[i]
 	}
 }
 
@@ -266,12 +266,12 @@ func (s *Server) auth(conn net.Conn) (*Passage, error) {
 	}
 
 	s.mutex.Lock()
-	passage := s.users[key]
+	passage, ok := s.users[key]
 	s.mutex.Unlock()
-	if passage == nil {
+	if !ok {
 		return nil, protocol.ErrFailAuth
 	}
-	return passage, nil
+	return &passage, nil
 }
 
 func (s *Server) handleStream(stream *Stream, passage *Passage) error {
