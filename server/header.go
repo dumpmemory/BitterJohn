@@ -47,6 +47,18 @@ func GetHeader(out model.Out, lisa *config.Lisa) (header *protocol.Header, err e
 				return nil
 			},
 		}
+	case ProtocolAnyTLS:
+		sni = common.SimplyGetParam(out.Method, "sni")
+		if sni == "" {
+			if sni, err = common.HostToSNI(out.Host, lisa.Host); err != nil {
+				return nil, err
+			}
+		}
+		tlsConfig = &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			ServerName:         sni,
+			InsecureSkipVerify: true,
+		}
 	}
 	return &protocol.Header{
 		ProxyAddress: net.JoinHostPort(out.Host, out.Port),

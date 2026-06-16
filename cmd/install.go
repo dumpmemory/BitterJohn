@@ -25,6 +25,7 @@ import (
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/config"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/pkg/copyfile"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/pkg/log"
+	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
 	"github.com/spf13/cobra"
 )
 
@@ -44,6 +45,16 @@ func init() {
 	u, _ := user.Current()
 	installCmd.PersistentFlags().BoolP("user", "u", false, fmt.Sprintf("install only for current user (%v)", u.Username))
 	installCmd.PersistentFlags().BoolP("gen-config", "g", false, "generate config from user input")
+}
+
+func installProtocolOptions() []string {
+	return []string{
+		string(protocol.ProtocolVMessTCP),
+		string(protocol.ProtocolVMessTlsGrpc),
+		string(protocol.ProtocolShadowsocks),
+		string(protocol.ProtocolJuicity),
+		string(server.ProtocolAnyTLS),
+	}
 }
 
 func hostsValidator(ans interface{}) error {
@@ -236,7 +247,7 @@ func getParams(targetConfigPath string) (*config.Params, bool, error) {
 	if err := survey.AskOne(&survey.Select{
 		Message: "Portocol:",
 		Default: "vmess+tls+grpc",
-		Options: []string{"vmess", "vmess+tls+grpc", "shadowsocks", "juicity"},
+		Options: installProtocolOptions(),
 	}, &proto, survey.WithValidator(survey.Required)); err != nil {
 		return nil, false, err
 	}

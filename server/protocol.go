@@ -14,6 +14,8 @@ const (
 	evictLifeWindow = 10 * time.Minute
 )
 
+const ProtocolAnyTLS protocol.Protocol = "anytls"
+
 type evictableDialer struct {
 	netproxy.Dialer
 	t *time.Timer
@@ -23,6 +25,10 @@ var (
 	dialerMap   = map[string]*evictableDialer{}
 	muDialerMap sync.Mutex
 )
+
+func ProtocolValid(p protocol.Protocol) bool {
+	return p.Valid() || p == ProtocolAnyTLS
+}
 
 func NewDialer(name string, nextDialer netproxy.Dialer, header *protocol.Header) (netproxy.Dialer, error) {
 	switch name {
