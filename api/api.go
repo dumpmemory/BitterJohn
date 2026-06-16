@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/BitterJohn/server"
 	"github.com/e14914c0-6759-480d-be89-66b7b7676451/SweetLisa/model"
@@ -51,7 +52,7 @@ func Register(ctx context.Context, endpointHost string, validateToken string, in
 		return cdnNames, nil, err
 	}
 	if respBody.Code != "SUCCESS" {
-		return cdnNames, nil, fmt.Errorf(respBody.Message)
+		return cdnNames, nil, errors.New(respBody.Message)
 	}
 	for _, passage := range respBody.Data {
 		users = append(users, server.Passage{

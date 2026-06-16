@@ -36,9 +36,9 @@ jobs:
           echo ::set-output name=VERSION::"$version"
           echo "VERSION=$version" >> $GITHUB_ENV
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v6
         with:
-          go-version: ^1.18
+          go-version: '1.26.4'
       - name: Build BitterJohn Binaries
         run: |
           go mod download

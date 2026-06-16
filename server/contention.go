@@ -27,32 +27,4 @@ func NewContentionCache() *ContentionCache {
 func (c *ContentionCache) Check(key string, protectTime time.Duration, ip net.IP) (accept bool, conflictIP net.IP) {
 	// Do not limit the different IPs.
 	return true, nil
-	if protectTime == 0 {
-		return true, nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var write bool
-	v, ok := c.m[key]
-	if !ok {
-		write = true
-	} else if v.ip.Equal(ip) {
-		c.m[key].countdown.Reset(protectTime)
-	} else if time.Now().After(v.protectDeadline) {
-		write = true
-	} else {
-		return false, v.ip
-	}
-	if write {
-		c.m[key] = ContentionCountdown{
-			countdown: time.AfterFunc(protectTime, func() {
-				c.mu.Lock()
-				delete(c.m, key)
-				c.mu.Unlock()
-			}),
-			ip:              ip,
-			protectDeadline: time.Now().Add(protectTime),
-		}
-	}
-	return true, nil
 }
