@@ -1,7 +1,6 @@
 package anytls
 
 import (
-	"context"
 	"crypto/sha256"
 	"errors"
 	"net"
@@ -14,7 +13,7 @@ import (
 )
 
 func TestServerPassageConfigLifecycle(t *testing.T) {
-	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	srvIface, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +49,7 @@ func TestServerPassageConfigLifecycle(t *testing.T) {
 }
 
 func TestAuthenticatedPassageSurvivesHotSync(t *testing.T) {
-	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	srvIface, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}

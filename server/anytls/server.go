@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -52,6 +53,10 @@ type Server struct {
 	cancel      context.CancelFunc
 	listener    net.Listener
 	activeConns map[net.Conn]struct{}
+
+	autocertServer   *http.Server
+	autocertListener net.Listener
+	autocertStarted  bool
 }
 
 type Passage struct {
@@ -60,7 +65,15 @@ type Passage struct {
 }
 
 func New(valueCtx context.Context, dialer netproxy.Dialer) (server.Server, error) {
-	tlsConfig, err := newSelfSignedTLSConfig()
+	tlsConfig, err := tlsConfigFromContext(valueCtx)
+	if err != nil {
+		return nil, err
+	}
+	return newServer(dialer, tlsConfig)
+}
+
+func newServer(dialer netproxy.Dialer, tlsConfig *tls.Config) (*Server, error) {
+	tlsConfig, err := normalizeTLSConfig(tlsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -76,15 +89,28 @@ func New(valueCtx context.Context, dialer netproxy.Dialer) (server.Server, error
 }
 
 func NewJohn(valueCtx context.Context, dialer netproxy.Dialer, sweetLisa config.Lisa, arg server.Argument) (server.Server, error) {
-	srv, err := New(valueCtx, dialer)
+	sni, err := common.HostsToSNI(arg.Hostnames, sweetLisa.Host)
 	if err != nil {
 		return nil, err
 	}
-	john := srv.(*Server)
+	var john *Server
+	tlsResources, err := newAutocertTLSResources(sni, func() {
+		if john != nil {
+			john.reRegister()
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	john, err = newServer(dialer, tlsResources.tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+	john.autocertServer = tlsResources.httpServer
 	john.sweetLisa = sweetLisa
 	john.arg = arg
 	john.passageContentionCache = server.NewContentionCache()
-	if err := srv.AddPassages([]server.Passage{{Manager: true}}); err != nil {
+	if err := john.AddPassages([]server.Passage{{Manager: true}}); err != nil {
 		return nil, err
 	}
 	if err := john.register(); err != nil {
@@ -97,6 +123,10 @@ func NewJohn(valueCtx context.Context, dialer netproxy.Dialer, sweetLisa config.
 func (s *Server) Listen(addr string) error {
 	lt, err := net.Listen("tcp", addr)
 	if err != nil {
+		return err
+	}
+	if err := s.startAutocertServer(); err != nil {
+		_ = lt.Close()
 		return err
 	}
 	return s.serveListener(lt)
@@ -144,6 +174,10 @@ func (s *Server) Close() error {
 		}
 		listener := s.listener
 		s.listener = nil
+		autocertServer := s.autocertServer
+		s.autocertServer = nil
+		autocertListener := s.autocertListener
+		s.autocertListener = nil
 		activeConns := make([]net.Conn, 0, len(s.activeConns))
 		for conn := range s.activeConns {
 			activeConns = append(activeConns, conn)
@@ -153,11 +187,48 @@ func (s *Server) Close() error {
 		if listener != nil {
 			err = listener.Close()
 		}
+		if autocertServer != nil {
+			if closeErr := autocertServer.Close(); err == nil && closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) && !errors.Is(closeErr, net.ErrClosed) {
+				err = closeErr
+			}
+		}
+		if autocertListener != nil {
+			if closeErr := autocertListener.Close(); err == nil && closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+				err = closeErr
+			}
+		}
 		for _, conn := range activeConns {
 			_ = conn.Close()
 		}
 	})
 	return err
+}
+
+func (s *Server) startAutocertServer() error {
+	s.lifecycleMu.Lock()
+	if s.closed || s.autocertServer == nil || s.autocertStarted {
+		s.lifecycleMu.Unlock()
+		return nil
+	}
+	autocertServer := s.autocertServer
+	autocertListener, err := net.Listen("tcp", autocertServer.Addr)
+	if err != nil {
+		s.lifecycleMu.Unlock()
+		return fmt.Errorf("listen for ACME challenges on %v: %w", strconv.Quote(autocertServer.Addr), err)
+	}
+	s.autocertListener = autocertListener
+	s.autocertStarted = true
+	s.lifecycleMu.Unlock()
+
+	go func() {
+		log.Alert("BitterJohn is listening at %v for ACME Challenges", autocertListener.Addr())
+		if err := autocertServer.Serve(autocertListener); err != nil &&
+			!errors.Is(err, http.ErrServerClosed) &&
+			!errors.Is(err, net.ErrClosed) {
+			log.Warn("autocertServer: %v", err)
+		}
+	}()
+	return nil
 }
 
 func (s *Server) AddPassages(passages []server.Passage) error {
@@ -384,6 +455,10 @@ func (s *Server) handleMsg(conn netproxy.Conn, passage *Passage) error {
 		return fmt.Errorf("%w: unexpected metadata cmd type: %v", protocol.ErrFailAuth, cmd[0])
 	}
 	return writeManagerBody(conn, resp)
+}
+
+func (s *Server) reRegister() {
+	s.setLastAlive(time.Time{})
 }
 
 func readManagerBody(r io.Reader) ([]byte, error) {

@@ -159,10 +159,7 @@ func TestLateServerSettingsCanUpgradeAfterNegotiationTimeout(t *testing.T) {
 
 func startSynackServer(t *testing.T, password string) (addr string, releaseSynack chan struct{}, closeFn func()) {
 	t.Helper()
-	tlsConfig, err := newSelfSignedTLSConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
+	tlsConfig := testTLSConfig(t)
 	lt, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -210,10 +207,7 @@ func startSynackServer(t *testing.T, password string) (addr string, releaseSynac
 
 func startV1Server(t *testing.T, password string) (addr string, closeFn func()) {
 	t.Helper()
-	tlsConfig, err := newSelfSignedTLSConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
+	tlsConfig := testTLSConfig(t)
 	lt, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +246,7 @@ func startV1Server(t *testing.T, password string) (addr string, closeFn func()) 
 
 func authFromConn(t *testing.T, conn net.Conn, password string) (*Passage, error) {
 	t.Helper()
-	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	srvIface, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}

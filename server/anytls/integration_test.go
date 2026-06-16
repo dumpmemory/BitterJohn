@@ -20,7 +20,7 @@ func TestDialerRelaysTCPThroughServer(t *testing.T) {
 	echoAddr, closeEcho := startEchoServer(t)
 	defer closeEcho()
 
-	srv, err := New(context.Background(), direct.SymmetricDirect)
+	srv, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestDialerRelaysUDPThroughServer(t *testing.T) {
 	udpAddr, closeUDP := startUDPEchoServer(t)
 	defer closeUDP()
 
-	srv, err := New(context.Background(), direct.SymmetricDirect)
+	srv, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestDialerRelaysUDPThroughServer(t *testing.T) {
 }
 
 func TestDialCmdMsgPing(t *testing.T) {
-	srv, err := New(context.Background(), direct.SymmetricDirect)
+	srv, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}

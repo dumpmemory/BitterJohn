@@ -132,7 +132,7 @@ func Run() (err error) {
 	}
 	shutdown := newRunShutdown(s.Close)
 	log.Alert("Protocol: %v", conf.John.Protocol)
-	if common.StringsHas(strings.Split(conf.John.Protocol, "+"), "tls") {
+	if protocolRequiresDNSReady(protocol.Protocol(conf.John.Protocol)) {
 		// waiting for the record
 		domain, err := common.HostsToSNI(conf.John.Hostname, conf.Lisa.Host)
 		if err != nil {
@@ -210,6 +210,13 @@ func Run() (err error) {
 		return fmt.Errorf("%v", err)
 	}
 	return nil
+}
+
+func protocolRequiresDNSReady(proto protocol.Protocol) bool {
+	if proto == server.ProtocolAnyTLS {
+		return true
+	}
+	return common.StringsHas(strings.Split(string(proto), "+"), "tls")
 }
 
 func protocolRuntime(proto protocol.Protocol) (context.Context, netproxy.Dialer, error) {

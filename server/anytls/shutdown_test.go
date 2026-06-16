@@ -1,7 +1,6 @@
 package anytls
 
 import (
-	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
@@ -17,7 +16,7 @@ import (
 )
 
 func TestCloseBeforeServeListenerStopsListener(t *testing.T) {
-	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	srvIface, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +46,7 @@ func TestCloseBeforeServeListenerStopsListener(t *testing.T) {
 }
 
 func TestCloseStopsAcceptedConnectionDuringTLSHandshake(t *testing.T) {
-	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	srvIface, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +68,7 @@ func TestCloseStopsAcceptedConnectionDuringTLSHandshake(t *testing.T) {
 }
 
 func TestCloseStopsAcceptedConnectionDuringAuthRead(t *testing.T) {
-	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	srvIface, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +94,7 @@ func TestCloseStopsAcceptedConnectionDuringAuthRead(t *testing.T) {
 }
 
 func TestCloseStopsAuthenticatedIdleSession(t *testing.T) {
-	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	srvIface, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +128,7 @@ func TestCloseStopsAuthenticatedIdleSession(t *testing.T) {
 }
 
 func TestManagerPingLastAliveIsSafeWithRegistrar(t *testing.T) {
-	srvIface, err := New(context.Background(), direct.SymmetricDirect)
+	srvIface, err := New(testTLSContext(t), direct.SymmetricDirect)
 	if err != nil {
 		t.Fatal(err)
 	}

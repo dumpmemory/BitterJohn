@@ -270,7 +270,7 @@ func getParams(targetConfigPath string) (*config.Params, bool, error) {
 	if err := survey.AskOne(&survey.Input{
 		Message: "Address to listen on:",
 		Default: "0.0.0.0:" + randPort,
-		Help: "The local address you want to listen. Protocols contain \"tls\" will occupy more one port 80. " +
+		Help: "The local address you want to listen. ACME TLS protocols (vmess+tls+grpc and anytls) will occupy one more port 80. " +
 			"Make sure the ports are available.",
 	}, &listen, survey.WithValidator(addressValidator)); err != nil {
 		return nil, false, err
